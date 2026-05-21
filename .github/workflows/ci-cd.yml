@@ -12,7 +12,7 @@ env:
   MINIMALSTDIO_DIR: ${{ github.workspace }}/.ci-deps/minimalstdio
   MINIMALSTDLIB_DIR: ${{ github.workspace }}/.ci-deps/minimalstdlib
   BAREMETALBASE_DIR: ${{ github.workspace }}/.ci-deps/baremetalbase
-  RPIBAREMETALOS_DIR: ${{ github.workspace }}/.ci-deps/rpibaremetalos
+  RPIBAREMETALOS_DIR: ${{ github.workspace }}/.ci-deps/rpibaremetalos/rpibaremetalos
   CPPUTEST_PATH: /usr
 
 jobs:
