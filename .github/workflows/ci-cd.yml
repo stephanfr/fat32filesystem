@@ -1,0 +1,137 @@
+name: fat32filesystem-ci-cd
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  MINIMALCLIB_DIR: ${{ github.workspace }}/.ci-deps/minimalclib
+  MINIMALSTDIO_DIR: ${{ github.workspace }}/.ci-deps/minimalstdio
+  MINIMALSTDLIB_DIR: ${{ github.workspace }}/.ci-deps/minimalstdlib
+  BAREMETALBASE_DIR: ${{ github.workspace }}/.ci-deps/baremetalbase
+  RPIBAREMETALOS_DIR: ${{ github.workspace }}/.ci-deps/rpibaremetalos/rpibaremetalos
+  CPPUTEST_PATH: /usr
+
+jobs:
+  ci-native-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout fat32filesystem
+        uses: actions/checkout@v4
+
+      - name: Checkout minimalclib
+        uses: actions/checkout@v4
+        with:
+          repository: stephanfr/minimalclib
+          path: .ci-deps/minimalclib
+
+      - name: Checkout minimalstdio
+        uses: actions/checkout@v4
+        with:
+          repository: stephanfr/minimalstdio
+          path: .ci-deps/minimalstdio
+
+      - name: Checkout minimalstdlib
+        uses: actions/checkout@v4
+        with:
+          repository: stephanfr/minimalstdlib
+          path: .ci-deps/minimalstdlib
+
+      - name: Checkout baremetalbase
+        uses: actions/checkout@v4
+        with:
+          repository: stephanfr/baremetalbase
+          path: .ci-deps/baremetalbase
+
+      - name: Checkout rpibaremetalos
+        uses: actions/checkout@v4
+        with:
+          repository: stephanfr/RPIBareMetalOS
+          path: .ci-deps/rpibaremetalos
+
+      - name: Install toolchain and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc g++ make cpputest
+
+      - name: Build dependency libraries
+        run: |
+          make -C "$MINIMALCLIB_DIR" native
+          make -C "$MINIMALSTDIO_DIR" native
+          make -C "$MINIMALSTDLIB_DIR" native
+
+      - name: Run fat32filesystem unit tests
+        run: |
+          make -f Makefile.test.mk test \
+            MINIMALCLIB_DIR="$MINIMALCLIB_DIR" \
+            MINIMALSTDIO_DIR="$MINIMALSTDIO_DIR" \
+            MINIMALSTDLIB_DIR="$MINIMALSTDLIB_DIR" \
+            BAREMETALBASE_DIR="$BAREMETALBASE_DIR" \
+            RPIBAREMETALOS_DIR="$RPIBAREMETALOS_DIR" \
+            CPPUTEST_PATH="$CPPUTEST_PATH"
+
+  cd-artifacts:
+    runs-on: ubuntu-latest
+    needs: ci-native-tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout fat32filesystem
+        uses: actions/checkout@v4
+
+      - name: Checkout minimalclib
+        uses: actions/checkout@v4
+        with:
+          repository: stephanfr/minimalclib
+          path: .ci-deps/minimalclib
+
+      - name: Checkout minimalstdio
+        uses: actions/checkout@v4
+        with:
+          repository: stephanfr/minimalstdio
+          path: .ci-deps/minimalstdio
+
+      - name: Checkout minimalstdlib
+        uses: actions/checkout@v4
+        with:
+          repository: stephanfr/minimalstdlib
+          path: .ci-deps/minimalstdlib
+
+      - name: Checkout baremetalbase
+        uses: actions/checkout@v4
+        with:
+          repository: stephanfr/baremetalbase
+          path: .ci-deps/baremetalbase
+
+      - name: Checkout rpibaremetalos
+        uses: actions/checkout@v4
+        with:
+          repository: stephanfr/RPIBareMetalOS
+          path: .ci-deps/rpibaremetalos
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc g++ make
+
+      - name: Build native library artifact
+        run: |
+          make native \
+            MINIMALCLIB_DIR="$MINIMALCLIB_DIR" \
+            MINIMALSTDIO_DIR="$MINIMALSTDIO_DIR" \
+            MINIMALSTDLIB_DIR="$MINIMALSTDLIB_DIR" \
+            BAREMETALBASE_DIR="$BAREMETALBASE_DIR" \
+            RPIBAREMETALOS_DIR="$RPIBAREMETALOS_DIR"
+
+      - name: Upload native library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fat32filesystem-native-${{ github.sha }}
+          path: |
+            lib/**/libfat32filesystem.a
+            LICENSE
+            README.md

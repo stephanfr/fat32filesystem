@@ -8,8 +8,14 @@ ifneq ($(wildcard /opt/cpputest/include/CppUTest/TestHarness.h),)
 CPPUTEST_PATH := /opt/cpputest
 endif
 
+MINIMALCLIB_DIR ?= ../minimalclib
+MINIMALSTDIO_DIR ?= ../minimalstdio
+MINIMALSTDLIB_DIR ?= ../minimalstdlib
+BAREMETALBASE_DIR ?= ../baremetalbase
+RPIBAREMETALOS_DIR ?= ../../rpibaremetalos
+
 SRC_ROOT := src
-SUPPORT_SRC_ROOT := ../../rpibaremetalos/src/c
+SUPPORT_SRC_ROOT := $(RPIBAREMETALOS_DIR)/src/c
 CPP_TEST_SRC_ROOT := test/src
 TEST_BUILD_ROOT := test/build
 OBJ_DIR := $(TEST_BUILD_ROOT)
@@ -35,8 +41,8 @@ TEST_BUILD_DIRS := $(sort $(dir $(OBJ)) $(dir $(TEST_OBJ)))
 
 TEST_EXE := $(TEST_OBJ_DIR)/cpputest_main.exe
 
-INCLUDE_DIRS := -Iinclude -I../../rpibaremetalos/include -I../baremetalbase/include -I../minimalstdio/include -I../minimalclib/include -I../minimalstdlib/include $(INCLUDE_DIRS) -I$(CPPUTEST_PATH)/include
-LDFLAGS += -L../minimalclib/lib/$(NATIVE_BUILD_DIR) -L../minimalstdio/lib/$(NATIVE_BUILD_DIR) -L../minimalstdlib/lib/$(NATIVE_BUILD_DIR) -L$(CPPUTEST_PATH)/lib
+INCLUDE_DIRS := -Iinclude -I$(RPIBAREMETALOS_DIR)/include -I$(BAREMETALBASE_DIR)/include -I$(MINIMALSTDIO_DIR)/include -I$(MINIMALCLIB_DIR)/include -I$(MINIMALSTDLIB_DIR)/include $(INCLUDE_DIRS) -I$(CPPUTEST_PATH)/include
+LDFLAGS += -L$(MINIMALCLIB_DIR)/lib/$(NATIVE_BUILD_DIR) -L$(MINIMALSTDIO_DIR)/lib/$(NATIVE_BUILD_DIR) -L$(MINIMALSTDLIB_DIR)/lib/$(NATIVE_BUILD_DIR) -L$(CPPUTEST_PATH)/lib
 LDLIBS = -lCppUTest -lCppUTestExt -lminimalclib -lminimalstdio -lminimalstdlib
 
 CDEFINES += -D__NO_LOGGING__
