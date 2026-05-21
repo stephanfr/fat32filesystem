@@ -54,7 +54,7 @@ namespace filesystems::fat32
          * @param first_lba_sector The first LBA sector of the filesystem.
          * @return A `ValueResult` containing a `FilesystemResultCodes` and a `FAT32BlockIOAdapter` on success.
          */
-        static ValueResult<FilesystemResultCodes, FAT32BlockIOAdapter> Mount(BlockIODevice &io_device_, uint32_t first_lba_sector);
+        static ValueResult<FilesystemResultCodes, FAT32BlockIOAdapter> Mount(BlockIODevice &io_device_, uint32_t first_lba_sector, uint32_t partition_sector_count = 0);
 
         //  Delete default and move constructors and assignment operators
 
@@ -80,6 +80,7 @@ namespace filesystems::fat32
               first_lba_sector_(adapter_to_copy.first_lba_sector_),
               fat_lba_(adapter_to_copy.fat_lba_),
               data_lba_(adapter_to_copy.data_lba_),
+              maximum_cluster_number_(adapter_to_copy.maximum_cluster_number_),
               fat32_entries_per_block_(adapter_to_copy.fat32_entries_per_block_),
               last_empty_cluster_found_(adapter_to_copy.last_empty_cluster_found_)
         {
@@ -162,7 +163,7 @@ namespace filesystems::fat32
          */
         FAT32ClusterIndex MaximumClusterNumber() const noexcept
         {
-            return FAT32ClusterIndex(sectors_per_fat_ * fat32_entries_per_block_);
+            return maximum_cluster_number_;
         }
 
         /**
@@ -175,7 +176,14 @@ namespace filesystems::fat32
         BlockIOResultCodes ReadCluster(FAT32ClusterIndex cluster,
                                        uint8_t *buffer)
         {
-            return io_device_->ReadFromBlock(buffer, FATClusterToSector(cluster), logical_sectors_per_cluster_).ResultCode();
+            auto sector = FATClusterToSector(cluster);
+
+            if (sector.Failed())
+            {
+                return BlockIOResultCodes::EMMC_INVALID_STORAGE_OFFSET;
+            }
+
+            return io_device_->ReadFromBlock(buffer, sector.Value(), logical_sectors_per_cluster_).ResultCode();
         }
 
         /**
@@ -188,7 +196,14 @@ namespace filesystems::fat32
         BlockIOResultCodes WriteCluster(FAT32ClusterIndex cluster,
                                         uint8_t *buffer)
         {
-            return io_device_->WriteBlock(buffer, FATClusterToSector(cluster), logical_sectors_per_cluster_).ResultCode();
+            auto sector = FATClusterToSector(cluster);
+
+            if (sector.Failed())
+            {
+                return BlockIOResultCodes::EMMC_INVALID_STORAGE_OFFSET;
+            }
+
+            return io_device_->WriteBlock(buffer, sector.Value(), logical_sectors_per_cluster_).ResultCode();
         }
 
         /**
@@ -252,6 +267,7 @@ namespace filesystems::fat32
         const LogicalBlockAddress first_lba_sector_;
         const LogicalBlockAddress fat_lba_;
         const LogicalBlockAddress data_lba_;
+        const FAT32ClusterIndex maximum_cluster_number_;
 
         const uint32_t fat32_entries_per_block_;
 
@@ -280,18 +296,20 @@ namespace filesystems::fat32
                             uint32_t root_directory_cluster,
                             uint32_t logical_sectors_per_cluster,
                             uint32_t bytes_per_sector,
-                            uint32_t number_of_fats,
+                        uint32_t sectors_per_fat,
                             uint32_t first_lba_sector,
                             uint32_t fat_lba,
-                            uint32_t data_lba)
+                        uint32_t data_lba,
+                        uint32_t maximum_cluster_number)
             : io_device_(&io_device),
               root_directory_cluster_(root_directory_cluster),
               logical_sectors_per_cluster_(logical_sectors_per_cluster),
               bytes_per_sector_(bytes_per_sector),
-              sectors_per_fat_(number_of_fats),
+              sectors_per_fat_(sectors_per_fat),
               first_lba_sector_(first_lba_sector),
               fat_lba_(fat_lba),
               data_lba_(data_lba),
+              maximum_cluster_number_(maximum_cluster_number),
               fat32_entries_per_block_(io_device_->BlockSize() / sizeof(uint32_t)),
               last_empty_cluster_found_(0)
         {
@@ -303,10 +321,9 @@ namespace filesystems::fat32
          * @param cluster_number The FAT32 cluster number to convert.
          * @return The corresponding sector number.
          */
-        uint32_t FATClusterToSector(FAT32ClusterIndex cluster_number) const
-        {
-            return ((static_cast<uint32_t>(cluster_number) - 2) * logical_sectors_per_cluster_) + static_cast<const uint32_t>(data_lba_);
-        }
+        ValueResult<FilesystemResultCodes, uint32_t> FATClusterToSector(FAT32ClusterIndex cluster_number) const;
+
+        ValueResult<FilesystemResultCodes, uint32_t> FATEntryToSector(FAT32ClusterIndex cluster) const;
 
         /**
          * Checks if the given FAT32 cluster index is out of range.  The cluster may be out of range

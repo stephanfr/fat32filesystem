@@ -11,6 +11,7 @@
 
 #include "filesystem/fat32_filesystem.h"
 #include "filesystem/master_boot_record.h"
+#include "filesystem/fat32_partition.h"
 
 namespace
 {
@@ -26,6 +27,34 @@ namespace
     minstd::pmr::polymorphic_allocator<MassStoragePartition> partition_allocator(&partition_resource);
 
     MassStoragePartitions partitions(partition_allocator);
+
+    constexpr uint32_t BPB_BYTES_PER_SECTOR_OFFSET = 11;
+    constexpr uint32_t BPB_SECTORS_PER_CLUSTER_OFFSET = 13;
+    constexpr uint32_t BPB_TOTAL_LOGICAL_SECTORS_32_OFFSET = 32;
+
+    void WriteU16LE(uint8_t *buffer, uint32_t offset, uint16_t value)
+    {
+        buffer[offset + 0] = static_cast<uint8_t>(value & 0xFF);
+        buffer[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+    }
+
+    void WriteU32LE(uint8_t *buffer, uint32_t offset, uint32_t value)
+    {
+        buffer[offset + 0] = static_cast<uint8_t>(value & 0xFF);
+        buffer[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+        buffer[offset + 2] = static_cast<uint8_t>((value >> 16) & 0xFF);
+        buffer[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xFF);
+    }
+
+    uint32_t FirstPartitionSector()
+    {
+        return ((FAT32PartitionOpaqueData *)partitions[0].GetOpaqueDataBlock())->first_sector_;
+    }
+
+    uint32_t PartitionSectorCount()
+    {
+        return ((FAT32PartitionOpaqueData *)partitions[0].GetOpaqueDataBlock())->num_sectors_;
+    }
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
@@ -79,6 +108,51 @@ namespace
         auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
 
         CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_UNABLE_TO_READ_FIRST_LOGICAL_BLOCK_ADDRESSING_SECTOR, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsInvalidBytesPerLogicalSector)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        WriteU16LE(first_lba_buffer, BPB_BYTES_PER_SECTOR_OFFSET, 1024);
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsUnsupportedSectorsPerCluster)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        first_lba_buffer[BPB_SECTORS_PER_CLUSTER_OFFSET] = 3;
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsTotalSectorsBeyondPartition)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        WriteU32LE(first_lba_buffer, BPB_TOTAL_LOGICAL_SECTORS_32_OFFSET, PartitionSectorCount() + 1);
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
     }
 
     TEST(FAT32BlockIOAdapterTest, UpdateFATTableOutOfRangeClusterNegativeTest)

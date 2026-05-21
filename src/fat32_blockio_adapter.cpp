@@ -8,6 +8,55 @@
 
 namespace filesystems::fat32
 {
+    namespace
+    {
+        constexpr uint32_t MIN_BYTES_PER_LOGICAL_SECTOR = 512;
+        constexpr uint32_t MAX_BYTES_PER_LOGICAL_SECTOR = 4096;
+        constexpr uint32_t MAX_LOGICAL_SECTORS_PER_CLUSTER = 128;
+
+        bool IsPowerOfTwo(uint32_t value)
+        {
+            return value != 0 && (value & (value - 1)) == 0;
+        }
+
+        bool CheckedAddU32(uint32_t lhs, uint32_t rhs, uint32_t &sum)
+        {
+            uint64_t checked_sum = static_cast<uint64_t>(lhs) + static_cast<uint64_t>(rhs);
+
+            if (checked_sum > 0xFFFFFFFFULL)
+            {
+                return false;
+            }
+
+            sum = static_cast<uint32_t>(checked_sum);
+            return true;
+        }
+
+        bool CheckedSubU32(uint32_t lhs, uint32_t rhs, uint32_t &difference)
+        {
+            if (lhs < rhs)
+            {
+                return false;
+            }
+
+            difference = lhs - rhs;
+            return true;
+        }
+
+        bool CheckedMulU32(uint32_t lhs, uint32_t rhs, uint32_t &product)
+        {
+            uint64_t checked_product = static_cast<uint64_t>(lhs) * static_cast<uint64_t>(rhs);
+
+            if (checked_product > 0xFFFFFFFFULL)
+            {
+                return false;
+            }
+
+            product = static_cast<uint32_t>(checked_product);
+            return true;
+        }
+    } // namespace
+
     //
     //  FAT32 Bios Parameter Block follows
     //
@@ -56,7 +105,7 @@ namespace filesystems::fat32
     //  FAT32 Block IO Adapter follows
     //
 
-    ValueResult<FilesystemResultCodes, FAT32BlockIOAdapter> FAT32BlockIOAdapter::Mount(BlockIODevice &io_device, uint32_t first_lba_sector)
+    ValueResult<FilesystemResultCodes, FAT32BlockIOAdapter> FAT32BlockIOAdapter::Mount(BlockIODevice &io_device, uint32_t first_lba_sector, uint32_t partition_sector_count)
     {
         using Result = ValueResult<FilesystemResultCodes, FAT32BlockIOAdapter>;
 
@@ -73,11 +122,116 @@ namespace filesystems::fat32
         FAT32BiosParameterBlock &bpb = *((FAT32BiosParameterBlock *)first_lba_buffer);
 
         //
-        //  Compute the sector offsets for the FAT, the Root Directory and the Data segments
+        //  Validate filesystem geometry and compute FAT/Data LBAs with checked arithmetic.
         //
 
-        uint32_t fat_lba = first_lba_sector + bpb.reserved_logical_sectors_;
-        uint32_t data_lba = fat_lba + (bpb.number_of_fats_ * bpb.logical_sectors_per_fat32_);
+        if (bpb.root_directory_entries_ != 0 ||
+            bpb.total_logical_sectors_fat16_ != 0 ||
+            bpb.logical_sectors_per_fat16_ != 0)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        if (bpb.bytes_per_logical_sector_ < MIN_BYTES_PER_LOGICAL_SECTOR ||
+            bpb.bytes_per_logical_sector_ > MAX_BYTES_PER_LOGICAL_SECTOR ||
+            !IsPowerOfTwo(bpb.bytes_per_logical_sector_) ||
+            bpb.bytes_per_logical_sector_ != io_device.BlockSize())
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        if (bpb.logical_sectors_per_cluster_ == 0 ||
+            bpb.logical_sectors_per_cluster_ > MAX_LOGICAL_SECTORS_PER_CLUSTER ||
+            !IsPowerOfTwo(bpb.logical_sectors_per_cluster_))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        if (bpb.reserved_logical_sectors_ == 0 ||
+            bpb.number_of_fats_ == 0 ||
+            bpb.logical_sectors_per_fat32_ == 0 ||
+            bpb.total_logical_sectors32_ == 0 ||
+            bpb.root_directory_cluster_ < 2)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t fat_sectors = 0;
+
+        if (!CheckedMulU32(bpb.number_of_fats_, bpb.logical_sectors_per_fat32_, fat_sectors))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t non_data_sectors = 0;
+
+        if (!CheckedAddU32(bpb.reserved_logical_sectors_, fat_sectors, non_data_sectors) ||
+            non_data_sectors >= bpb.total_logical_sectors32_)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t data_sectors = 0;
+
+        if (!CheckedSubU32(bpb.total_logical_sectors32_, non_data_sectors, data_sectors) ||
+            data_sectors < bpb.logical_sectors_per_cluster_)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        if (partition_sector_count != 0 && bpb.total_logical_sectors32_ > partition_sector_count)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t fat_lba = 0;
+        uint32_t data_lba = 0;
+        uint32_t partition_end_lba = 0;
+
+        if (!CheckedAddU32(first_lba_sector, bpb.reserved_logical_sectors_, fat_lba) ||
+            !CheckedAddU32(fat_lba, fat_sectors, data_lba) ||
+            !CheckedAddU32(first_lba_sector, bpb.total_logical_sectors32_, partition_end_lba) ||
+            data_lba >= partition_end_lba)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t fat32_entries_per_block = io_device.BlockSize() / sizeof(uint32_t);
+
+        if (fat32_entries_per_block == 0)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t max_clusters_from_fat = 0;
+
+        if (!CheckedMulU32(bpb.logical_sectors_per_fat32_, fat32_entries_per_block, max_clusters_from_fat) ||
+            max_clusters_from_fat <= 2)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t cluster_count_in_data = data_sectors / bpb.logical_sectors_per_cluster_;
+
+        if (cluster_count_in_data == 0)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t max_cluster_from_data = 0;
+
+        if (!CheckedAddU32(cluster_count_in_data, 1, max_cluster_from_data))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t max_cluster_from_fat = max_clusters_from_fat - 1;
+        uint32_t maximum_cluster_number = max_cluster_from_fat < max_cluster_from_data ? max_cluster_from_fat : max_cluster_from_data;
+
+        if (bpb.root_directory_cluster_ > maximum_cluster_number)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
 
         LogDebug1("First LBA, FAT LBA, Data LBA, Logical Sectors per FAT32, Logical Sectors per Cluster: %u, %u, %u, %u, %u\n", first_lba_sector, fat_lba, data_lba, bpb.logical_sectors_per_fat32_, bpb.logical_sectors_per_cluster_);
         LogDebug1("Root Directory Cluster: %u\n", bpb.root_directory_cluster_);
@@ -91,7 +245,8 @@ namespace filesystems::fat32
                                                    bpb.logical_sectors_per_fat32_,
                                                    first_lba_sector,
                                                    fat_lba,
-                                                   data_lba));
+                                                   data_lba,
+                                                   maximum_cluster_number));
     }
 
     ValueResult<FilesystemResultCodes, FAT32ClusterIndex> FAT32BlockIOAdapter::NextClusterInChain(FAT32ClusterIndex cluster) const
@@ -109,16 +264,22 @@ namespace filesystems::fat32
 
         //  Calculate the sector LBA from the FAT table base address.
 
-        uint32_t sector = static_cast<uint32_t>(fat_lba_) + (static_cast<uint32_t>(cluster) / fat32_entries_per_block_);
+        auto sector = FATEntryToSector(cluster);
+
+        if (sector.Failed())
+        {
+            return Result::Failure(sector.ResultCode());
+        }
+
         uint32_t offset = static_cast<uint32_t>(cluster) % fat32_entries_per_block_;
 
         uint32_t current_fat[(io_device_->BlockSize() / sizeof(uint32_t)) + 2];
 
         //  FAT entries are only one sector at a time - they are not clustered.
 
-        if (io_device_->ReadFromBlock((uint8_t *)current_fat, sector, 1).Failed())
+        if (io_device_->ReadFromBlock((uint8_t *)current_fat, sector.Value(), 1).Failed())
         {
-            LogDebug1("Unable to load FAT32 sector: %u\n", sector);
+            LogDebug1("Unable to load FAT32 sector: %u\n", sector.Value());
             return Result::Failure(FilesystemResultCodes::FAT32_UNABLE_TO_READ_FAT_TABLE_SECTOR);
         }
 
@@ -187,24 +348,30 @@ namespace filesystems::fat32
 
         // Calculate the sector LBA from the FAT table base address
 
-        uint32_t sector = static_cast<uint32_t>(fat_lba_) + (static_cast<uint32_t>(cluster) / fat32_entries_per_block_);
+        auto sector = FATEntryToSector(cluster);
+
+        if (sector.Failed())
+        {
+            return sector.ResultCode();
+        }
+
         uint32_t start_off = static_cast<uint32_t>(cluster) % fat32_entries_per_block_;
 
         uint32_t current_fat[(io_device_->BlockSize() / sizeof(uint32_t)) + 2];
 
         //  FAT entries are only one sector at a time - they are not clustered.
 
-        if (io_device_->ReadFromBlock((uint8_t *)current_fat, sector, 1).Failed())
+        if (io_device_->ReadFromBlock((uint8_t *)current_fat, sector.Value(), 1).Failed())
         {
-            LogDebug1("Unable to load FAT32 sector: %u\n", sector);
+            LogDebug1("Unable to load FAT32 sector: %u\n", sector.Value());
             return FilesystemResultCodes::FAT32_UNABLE_TO_READ_FAT_TABLE_SECTOR;
         }
 
         current_fat[start_off] = static_cast<uint32_t>(new_value);
 
-        if (io_device_->WriteBlock((uint8_t *)current_fat, sector, 1).Failed())
+        if (io_device_->WriteBlock((uint8_t *)current_fat, sector.Value(), 1).Failed())
         {
-            LogDebug1("Unable to write FAT32 sector: %u\n", sector);
+            LogDebug1("Unable to write FAT32 sector: %u\n", sector.Value());
             return FilesystemResultCodes::FAT32_UNABLE_TO_WRITE_FAT_TABLE_SECTOR;
         }
 
@@ -305,18 +472,68 @@ namespace filesystems::fat32
 
     FilesystemResultCodes FAT32BlockIOAdapter::ReadFATBlock(FAT32ClusterIndex cluster, uint32_t *buffer) const
     {
-        //  Calculate the sector LBA from the FAT table base address.
+        auto sector = FATEntryToSector(cluster);
 
-        uint32_t sector = static_cast<uint32_t>(fat_lba_) + (static_cast<uint32_t>(cluster) / fat32_entries_per_block_);
+        if (sector.Failed())
+        {
+            return sector.ResultCode();
+        }
 
         //  FAT entries are only one sector at a time - they are not clustered.
 
-        if (io_device_->ReadFromBlock((uint8_t *)buffer, sector, 1).Failed())
+        if (io_device_->ReadFromBlock((uint8_t *)buffer, sector.Value(), 1).Failed())
         {
-            LogDebug1("Unable to load FAT32 sector: %u\n", sector);
+            LogDebug1("Unable to load FAT32 sector: %u\n", sector.Value());
             return FilesystemResultCodes::FAT32_UNABLE_TO_READ_FAT_TABLE_SECTOR;
         }
 
         return FilesystemResultCodes::SUCCESS;
+    }
+
+    ValueResult<FilesystemResultCodes, uint32_t> FAT32BlockIOAdapter::FATClusterToSector(FAT32ClusterIndex cluster_number) const
+    {
+        using Result = ValueResult<FilesystemResultCodes, uint32_t>;
+
+        if (IsClusterOutOfRange(cluster_number))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE);
+        }
+
+        uint32_t cluster_offset = static_cast<uint32_t>(cluster_number) - 2;
+        uint32_t cluster_sector_offset = 0;
+
+        if (!CheckedMulU32(cluster_offset, logical_sectors_per_cluster_, cluster_sector_offset))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE);
+        }
+
+        uint32_t sector = 0;
+
+        if (!CheckedAddU32(static_cast<uint32_t>(data_lba_), cluster_sector_offset, sector))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE);
+        }
+
+        return Result::Success(sector);
+    }
+
+    ValueResult<FilesystemResultCodes, uint32_t> FAT32BlockIOAdapter::FATEntryToSector(FAT32ClusterIndex cluster) const
+    {
+        using Result = ValueResult<FilesystemResultCodes, uint32_t>;
+
+        if (IsClusterOutOfRange(cluster) || fat32_entries_per_block_ == 0)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE);
+        }
+
+        uint32_t sector_offset = static_cast<uint32_t>(cluster) / fat32_entries_per_block_;
+        uint32_t sector = 0;
+
+        if (!CheckedAddU32(static_cast<uint32_t>(fat_lba_), sector_offset, sector))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE);
+        }
+
+        return Result::Success(sector);
     }
 } // namespace filesystems::fat32
