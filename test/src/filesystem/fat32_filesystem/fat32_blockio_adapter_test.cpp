@@ -30,7 +30,14 @@ namespace
 
     constexpr uint32_t BPB_BYTES_PER_SECTOR_OFFSET = 11;
     constexpr uint32_t BPB_SECTORS_PER_CLUSTER_OFFSET = 13;
+    constexpr uint32_t BPB_RESERVED_LOGICAL_SECTORS_OFFSET = 14;
+    constexpr uint32_t BPB_NUMBER_OF_FATS_OFFSET = 16;
+    constexpr uint32_t BPB_ROOT_DIRECTORY_ENTRIES_OFFSET = 17;
+    constexpr uint32_t BPB_TOTAL_LOGICAL_SECTORS_FAT16_OFFSET = 19;
+    constexpr uint32_t BPB_LOGICAL_SECTORS_PER_FAT16_OFFSET = 22;
     constexpr uint32_t BPB_TOTAL_LOGICAL_SECTORS_32_OFFSET = 32;
+    constexpr uint32_t BPB_LOGICAL_SECTORS_PER_FAT32_OFFSET = 36;
+    constexpr uint32_t BPB_ROOT_DIRECTORY_CLUSTER_OFFSET = 44;
 
     void WriteU16LE(uint8_t *buffer, uint32_t offset, uint16_t value)
     {
@@ -132,6 +139,156 @@ namespace
         CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
 
         first_lba_buffer[BPB_SECTORS_PER_CLUSTER_OFFSET] = 3;
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsRootDirectoryEntriesFAT16Field)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        WriteU16LE(first_lba_buffer, BPB_ROOT_DIRECTORY_ENTRIES_OFFSET, 1);
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsTotalLogicalSectorsFAT16Field)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        WriteU16LE(first_lba_buffer, BPB_TOTAL_LOGICAL_SECTORS_FAT16_OFFSET, 1);
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsLogicalSectorsPerFAT16Field)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        WriteU16LE(first_lba_buffer, BPB_LOGICAL_SECTORS_PER_FAT16_OFFSET, 1);
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsZeroReservedLogicalSectors)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        WriteU16LE(first_lba_buffer, BPB_RESERVED_LOGICAL_SECTORS_OFFSET, 0);
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsZeroNumberOfFATs)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        first_lba_buffer[BPB_NUMBER_OF_FATS_OFFSET] = 0;
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsZeroLogicalSectorsPerFAT32)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        WriteU32LE(first_lba_buffer, BPB_LOGICAL_SECTORS_PER_FAT32_OFFSET, 0);
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsZeroTotalLogicalSectors32)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        WriteU32LE(first_lba_buffer, BPB_TOTAL_LOGICAL_SECTORS_32_OFFSET, 0);
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsRootDirectoryClusterBelowMinimum)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        WriteU32LE(first_lba_buffer, BPB_ROOT_DIRECTORY_CLUSTER_OFFSET, 1);
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsZeroSectorsPerCluster)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        first_lba_buffer[BPB_SECTORS_PER_CLUSTER_OFFSET] = 0;
+
+        CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsSectorsPerClusterOverMaximum)
+    {
+        uint8_t first_lba_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
+
+        first_lba_buffer[BPB_SECTORS_PER_CLUSTER_OFFSET] = 129;
 
         CHECK(test_device->WriteBlock(first_lba_buffer, FirstPartitionSector(), 1).Successful());
 
