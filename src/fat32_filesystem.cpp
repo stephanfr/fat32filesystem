@@ -34,7 +34,8 @@ namespace filesystems::fat32
 
         //  Mount the block IO adapter
 
-        auto adapter = FAT32BlockIOAdapter::Mount(io_device, ((FAT32PartitionOpaqueData *)(partition.GetOpaqueDataBlock()))->first_sector_);
+        auto *opaque_data = (FAT32PartitionOpaqueData *)(partition.GetOpaqueDataBlock());
+        auto adapter = FAT32BlockIOAdapter::Mount(io_device, opaque_data->first_sector_, opaque_data->num_sectors_);
 
         ReturnOnFailure(adapter);
 

@@ -93,7 +93,9 @@ namespace filesystems
 
             //  We have a FAT32 partition, so get the volume name
 
-            auto fat32_adapter = fat32::FAT32BlockIOAdapter::Mount(io_device, mbr.partitions_[i].first_logical_block_addressing_sector_);
+            auto fat32_adapter = fat32::FAT32BlockIOAdapter::Mount(io_device,
+                                                                   mbr.partitions_[i].first_logical_block_addressing_sector_,
+                                                                   mbr.partitions_[i].num_sectors_);
 
             ReturnOnFailure(fat32_adapter);
 
