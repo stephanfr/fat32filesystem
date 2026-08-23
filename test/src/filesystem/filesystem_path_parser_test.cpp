@@ -435,5 +435,13 @@ namespace
 
             CHECK(path.ResultCode() == FilesystemResultCodes::ILLEGAL_PATH);
         }
+
+        {
+            //  Path ends with a directory delimiter
+
+            auto path = FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/this/is/an/illegal/path/"));
+
+            CHECK(path.ResultCode() == FilesystemResultCodes::ILLEGAL_PATH);
+        }
     }
 }
