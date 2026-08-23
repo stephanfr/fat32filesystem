@@ -51,6 +51,11 @@ namespace filesystems
             return Result::Success(minstd::move(path));
         }
 
+        if (path_string[path_string.length() - 1] == DIRECTORY_DELIMITER)
+        {
+            return Result::Failure(FilesystemResultCodes::ILLEGAL_PATH);
+        }
+
         //  Determine if this is a relative path or not
 
         path->is_relative_ = (path_string[0] != DIRECTORY_DELIMITER);
