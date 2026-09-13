@@ -36,6 +36,11 @@ namespace filesystems::fat32
             return file_uuid_;
         }
 
+        FileModes Mode() const override
+        {
+            return mode_;
+        }
+
         ReferenceResult<FilesystemResultCodes, const minstd::string> AbsolutePath() const override
         {
             using Result = ReferenceResult<FilesystemResultCodes, const minstd::string>;
