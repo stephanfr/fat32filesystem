@@ -23,28 +23,52 @@ namespace filesystems
         {
             using Result = ReferenceResult<FilesystemResultCodes, File>;
 
-            auto insert_by_filename_result = file_by_absolute_path_map_.insert(minstd::cref(*(file->AbsolutePath())), minstd::move(file));
+            auto path = file->AbsolutePath();
 
-            if (minstd::get<1>(insert_by_filename_result) == false)
+            if (!path.Successful())
+            {
+                return Result::Failure(path.ResultCode());
+            }
+
+            const bool new_open_is_exclusive = IsExclusive(file->Mode());
+
+            for (auto itr = open_files_.begin(); itr != open_files_.end(); ++itr)
+            {
+                File &open_file = *(minstd::get<1>(*itr));
+
+                auto open_path = open_file.AbsolutePath();
+
+                if (!open_path.Successful() || !(*open_path == *path))
+                {
+                    continue;
+                }
+
+                if (new_open_is_exclusive || IsExclusive(open_file.Mode()))
+                {
+                    return Result::Failure(FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY);
+                }
+            }
+
+            //  Take the UUID BEFORE the move -- file is null afterwards, and the argument
+            //      evaluation order of insert() is unspecified.
+
+            const UUID id = file->ID();
+
+            auto insert_result = open_files_.insert(id, minstd::move(file));
+
+            if (minstd::get<1>(insert_result) == false)
             {
                 return Result::Failure(FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY);
             }
 
-            File &file_ref = *(minstd::get<1>(*minstd::get<0>(insert_by_filename_result)));
-
-            file_by_uuid_map_.insert(file_ref.ID(), minstd::ref(file_ref));
-
-            return Result::Success(file_ref);
+            return Result::Success(*(minstd::get<1>(*minstd::get<0>(insert_result))));
         }
 
         FilesystemResultCodes RemoveFile(const File &file)
         {
-            if (file_by_uuid_map_.erase(file.ID()) != 1)
-            {
-                LogError("FAT32File not found in file map by UUID.  Will try to delete by filename anyway.");
-            }
+            const UUID id = file.ID();
 
-            if (file_by_absolute_path_map_.erase(minstd::cref(*(file.AbsolutePath()))) != 1)
+            if (open_files_.erase(id) != 1)
             {
                 LogError("File not found in file map.");
 
@@ -56,34 +80,48 @@ namespace filesystems
 
         bool IsFileOpen(const minstd::string &path)
         {
-            return file_by_absolute_path_map_.find(minstd::cref(path)) != file_by_absolute_path_map_.end();
+            for (auto itr = open_files_.begin(); itr != open_files_.end(); ++itr)
+            {
+                auto open_path = minstd::get<1>(*itr)->AbsolutePath();
+
+                if (open_path.Successful() && (*open_path == path))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         ReferenceResult<FilesystemResultCodes, File> GetFileByUUID(const UUID &uuid)
         {
             using Result = ReferenceResult<FilesystemResultCodes, File>;
 
-            auto itr = file_by_uuid_map_.find(uuid);
+            auto itr = open_files_.find(uuid);
 
-            if (itr == file_by_uuid_map_.end())
+            if (itr == open_files_.end())
             {
-                return ReferenceResult<FilesystemResultCodes, File>::Failure(FilesystemResultCodes::FILE_IS_CLOSED);
+                return Result::Failure(FilesystemResultCodes::FILE_IS_CLOSED);
             }
 
-            return Result::Success(minstd::get<1>(*itr).get());
+            return Result::Success(*(minstd::get<1>(*itr)));
         }
 
     private:
-        using FileByAbsolutePathMap = minstd::map<minstd::reference_wrapper<const minstd::string>, minstd::unique_ptr<File>>;
-        using FileByAbsolutePathMapAllocator = minstd::pmr::polymorphic_allocator<FileByAbsolutePathMap::node_type>;
-        using FileByUUIDMap = minstd::map<UUID, minstd::reference_wrapper<File>>;
-        using FileByUUIDAllocator = minstd::pmr::polymorphic_allocator<FileByUUIDMap::node_type>;
+        //  Anything beyond READ is a writer.
 
-        FileByAbsolutePathMapAllocator file_by_absolute_path_map_allocator_{&__os_dynamic_heap_resource};
-        FileByAbsolutePathMap file_by_absolute_path_map_{file_by_absolute_path_map_allocator_};
+        static bool IsExclusive(FileModes mode)
+        {
+            return (static_cast<uint32_t>(mode) & ~static_cast<uint32_t>(FileModes::READ)) != 0;
+        }
 
-        FileByUUIDAllocator file_by_uuid_allocator_{&__os_dynamic_heap_resource};
-        FileByUUIDMap file_by_uuid_map_{file_by_uuid_allocator_};
+        //  One map, and it owns the files.
+
+        using OpenFileMap = minstd::map<UUID, minstd::unique_ptr<File>>;
+        using OpenFileMapAllocator = minstd::pmr::polymorphic_allocator<OpenFileMap::node_type>;
+
+        OpenFileMapAllocator open_files_allocator_{&__os_dynamic_heap_resource};
+        OpenFileMap open_files_{open_files_allocator_};
     };
 
     FileMap &GetFileMap();
