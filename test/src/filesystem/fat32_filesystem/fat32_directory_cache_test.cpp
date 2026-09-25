@@ -171,4 +171,83 @@ namespace
 
         CHECK(directory_cache.CurrentSize() == 0);
     }
+
+    TEST(FAT32DirectoryCache, EvictedPathCanBeReCached)
+    {
+        constexpr size_t CACHE_SIZE = 2;
+
+        FAT32DirectoryCache directory_cache(CACHE_SIZE, MurmurHash64ASeed(1));
+
+        minstd::fixed_string<> first_path("/first");
+
+        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
+                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 0),
+                                 FAT32ClusterIndex(10),
+                                 FAT32Compact8Dot3Filename("FIRST", ""),
+                                 first_path);
+
+        CHECK(directory_cache.FindEntry(FAT32ClusterIndex(10)).has_value());
+
+        //  Push /first out of the cache.
+
+        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
+                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 1),
+                                 FAT32ClusterIndex(11),
+                                 FAT32Compact8Dot3Filename("SECOND", ""),
+                                 minstd::fixed_string<>("/second"));
+
+        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
+                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 2),
+                                 FAT32ClusterIndex(12),
+                                 FAT32Compact8Dot3Filename("THIRD", ""),
+                                 minstd::fixed_string<>("/third"));
+
+        CHECK_FALSE(directory_cache.FindEntry(FAT32ClusterIndex(10)).has_value());
+
+        //  Re-add it.  Pre-fix the stale path-hash entry makes AddEntry early-return, so
+        //      nothing is inserted and /first can never re-enter the cache for the lifetime
+        //      of the filesystem.
+
+        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
+                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 0),
+                                 FAT32ClusterIndex(10),
+                                 FAT32Compact8Dot3Filename("FIRST", ""),
+                                 first_path);
+
+        CHECK(directory_cache.FindEntry(FAT32ClusterIndex(10)).has_value());
+    }
+
+    TEST(FAT32DirectoryCache, ReAddingTheSameEntryIsNotCountedAsACollision)
+    {
+        FAT32DirectoryCache directory_cache(16, MurmurHash64ASeed(1));
+
+        minstd::fixed_string<> path("/same");
+
+        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
+                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 0),
+                                 FAT32ClusterIndex(20),
+                                 FAT32Compact8Dot3Filename("SAME", ""),
+                                 path);
+
+        const uint64_t collisions_before = directory_cache.Collisions();
+
+        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
+                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 0),
+                                 FAT32ClusterIndex(20),
+                                 FAT32Compact8Dot3Filename("SAME", ""),
+                                 path);
+
+        CHECK_EQUAL(collisions_before, directory_cache.Collisions());
+
+        //  A genuinely different cluster reaching the same hash still counts.
+
+        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
+                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 1),
+                                 FAT32ClusterIndex(21),
+                                 FAT32Compact8Dot3Filename("OTHER", ""),
+                                 path);
+
+        CHECK_EQUAL(collisions_before + 1, directory_cache.Collisions());
+    }
+
 }

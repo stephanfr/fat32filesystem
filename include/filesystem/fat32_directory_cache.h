@@ -162,14 +162,34 @@ namespace filesystems::fat32
 
             uint64_t path_hash = MurmurHash64A(path.c_str(), path.length(), path_hash_seed_);
 
-            if ((cache_.find(first_cluster_id).has_value()) ||
-                (indices_by_path_hash_.find(path_hash)) != indices_by_path_hash_.end())
-            {
-                if (indices_by_path_hash_.find(path_hash) != indices_by_path_hash_.end())
-                {
-                    collisions_++;
-                }
+            auto existing_index = indices_by_path_hash_.find(path_hash);
 
+            if (existing_index != indices_by_path_hash_.end())
+            {
+                //  The index entry can outlive the cache entry it points at, because the LRU
+                //      cache evicts silently.  Reap it rather than letting it lock this path
+                //      out of the cache permanently.
+
+                if (!cache_.find(minstd::get<1>(*existing_index)).has_value())
+                {
+                    indices_by_path_hash_.erase(path_hash);
+                }
+                else
+                {
+                    //  A different cluster hashing to the same path hash is a real collision.
+                    //      The same cluster is just a redundant re-add.
+
+                    if (minstd::get<1>(*existing_index) != first_cluster_id)
+                    {
+                        collisions_++;
+                    }
+
+                    return;
+                }
+            }
+
+            if (cache_.find(first_cluster_id).has_value())
+            {
                 return;
             }
 
@@ -229,9 +249,21 @@ namespace filesystems::fat32
                 return minstd::optional<FAT32ClusterIndex>();
             }
 
-            //  Insure paths match so we do not get a false match due to a hash collision
+            //  The hash index can outlive the cache entry it points at, because the LRU cache
+            //      evicts silently.  Treat that as a miss and reap the stale index entry, or
+            //      AddEntry() will refuse to ever cache this path again.
 
             auto entry = cache_.find(minstd::get<1>(*itr));
+
+            if (!entry.has_value())
+            {
+                indices_by_path_hash_.erase(path_hash);
+                misses_++;
+
+                return minstd::optional<FAT32ClusterIndex>();
+            }
+
+            //  Insure paths match so we do not get a false match due to a hash collision
 
             if (entry->get()->AbsolutePath() != path)
             {
@@ -258,9 +290,15 @@ namespace filesystems::fat32
                 return minstd::optional<minstd::reference_wrapper<FAT32DirectoryCacheEntry>>();
             }
 
-            //  Insure paths match so we do not get a false match due to a hash collision
-
             auto entry = cache_.find(minstd::get<1>(*itr));
+
+            if (!entry.has_value())
+            {
+                indices_by_path_hash_.erase(path_hash);
+                misses_++;
+
+                return minstd::optional<minstd::reference_wrapper<FAT32DirectoryCacheEntry>>();
+            }
 
             if (entry->get()->AbsolutePath() != path)
             {

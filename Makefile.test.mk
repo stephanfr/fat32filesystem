@@ -47,11 +47,13 @@ LDLIBS = -lCppUTest -lCppUTestExt -lminimalclib -lminimalstdio -lminimalstdlib
 
 CDEFINES += -D__NO_LOGGING__
 
+.PRECIOUS: $(TEST_EXE)
+
 test: clean checkdirs $(TEST_EXE)
 
 $(TEST_EXE): $(TEST_OBJ) $(OBJ)
 	$(LD) $(OBJ) $(TEST_OBJ) $(LDFLAGS) $(LDLIBS) $(TEST_LIB) -o $(TEST_EXE)
-	-./$(TEST_EXE)
+	./$(TEST_EXE)
 
 $(TEST_BUILD_ROOT)/src/%.o: $(SRC_ROOT)/%.cpp
 	@mkdir -p $(dir $@)

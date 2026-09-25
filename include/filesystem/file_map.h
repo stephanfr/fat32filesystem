@@ -107,6 +107,11 @@ namespace filesystems
             return Result::Success(*(minstd::get<1>(*itr)));
         }
 
+        void Clear()
+        {
+            open_files_.clear();
+        }
+
     private:
         //  Anything beyond READ is a writer.
 

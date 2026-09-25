@@ -7,7 +7,7 @@
 namespace filesystems
 {
 
-    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 40);
+    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 41);
 
     const char *ErrorMessage(FilesystemResultCodes code)
     {
@@ -75,6 +75,9 @@ namespace filesystems
 
         case FilesystemResultCodes::ROOT_DIRECTORY_CANNOT_BE_REMOVED:
             return "Root directory cannot be removed";
+
+        case FilesystemResultCodes::DIRECTORY_NOT_EMPTY:
+            return "Directory is not empty";
 
         case FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY:
             return "File already opened exclusively";

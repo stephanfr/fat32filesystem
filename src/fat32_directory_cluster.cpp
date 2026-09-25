@@ -218,16 +218,16 @@ namespace filesystems::fat32
 
         LogEntryAndExit("Searching for empty block of %u entries\n", num_entries_required);
 
-        //  We may need to add a new cluster to the directory, so we will retry up to twice if necessary.
+        //  We may need to add a new cluster to the directory, so we will retry up to three times if necessary.
         //      The smallest directory cluster is 16 entries, and the largest LFN + entry is 20 entries so we might need 2 clusters.
 
         int retries = 0;
 
-        uint32_t current_count_of_empty_entries = 0;
-        FAT32DirectoryEntryAddress current_start_address;
-
         do
         {
+            uint32_t current_count_of_empty_entries = 0;
+            FAT32DirectoryEntryAddress current_start_address;
+
             //  Iterate over the entries looking for a contiguous set of empty entries of the required length
 
             FAT32DirectoryCluster::cluster_entry_const_iterator itr = cluster_entry_iterator_begin();
@@ -984,7 +984,7 @@ namespace filesystems::fat32
 
             ReturnOnFailure(next_cluster);
 
-            if (next_cluster.Value() == FAT32EntryAllocatedAndEndOfFile)
+            if (next_cluster.Value() >= FAT32EntryEOFThreshold)
             {
                 current_entry_.index_--;
                 location_ = Location::END;

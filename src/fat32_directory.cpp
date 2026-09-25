@@ -376,6 +376,34 @@ namespace filesystems::fat32
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
+        //  A directory must be empty before it may be removed.  Releasing the chain of a
+        //      populated directory strands every descendant's clusters - they stay marked
+        //      allocated in the FAT with nothing referencing them.
+
+        {
+            FAT32DirectoryCluster contents(filesystem.Id(), block_io_adapter, first_cluster_);
+
+            auto itr = contents.directory_entry_iterator_begin();
+
+            while (!itr.end())
+            {
+                auto entry = itr.AsClusterEntry();
+
+                ReturnOnFailure(entry);
+
+                minstd::fixed_string<MAX_FILENAME_LENGTH> entry_name;
+
+                entry->Compact8Dot3Filename(entry_name);
+
+                if ((entry_name != ".") && (entry_name != ".."))
+                {
+                    return FilesystemResultCodes::DIRECTORY_NOT_EMPTY;
+                }
+
+                ReturnOnCallFailure(itr++);
+            }
+        }
+
         //  Remove any entry from the cache first
 
         filesystem.DirectoryCache().RemoveEntry(first_cluster_);
