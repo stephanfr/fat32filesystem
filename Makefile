@@ -10,17 +10,11 @@ else
 include Makefile.aarch64.mk
 endif
 
+#  The test, coverage and sanitizer builds are defined in Makefile.test.mk, which includes the
+#      native toolchain.  This file includes the aarch64 toolchain, where none of the test or
+#      coverage variables exist - so it must only delegate, never pass flags of its own.
 
 .PHONY: test coverage asan
-test:
-	@$(MAKE) -f Makefile.test.mk test
-
-coverage:
-	@$(MAKE) -f Makefile.test.mk test \
-	    TEST_CFLAGS="$(COVERAGE_CFLAGS)" TEST_OPTIMIZATION_FLAGS="$(COVERAGE_OPTIMIZATION_FLAGS)"
-	@gcov -r test/build/*.gcda | tail -40
-
-asan:
-	@$(MAKE) -f Makefile.test.mk test \
-	    TEST_OPTIMIZATION_FLAGS="-O1" \
-	    TEST_CFLAGS="$(TEST_CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer"
+test coverage asan:
+	@$(MAKE) -f Makefile.test.mk $@
+	
