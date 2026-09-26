@@ -1097,9 +1097,17 @@ namespace filesystems::fat32
          * @brief Copy constructor for the iterator base.
          *
          * These iterators are returned by value through ValueResult constantly, so they get
-         * copied.  directory_entries_ is a cached pointer into buffer_, and the implicit
-         * copy would carry the SOURCE object's pointer into the copy - leaving the copy
-         * reading storage it does not own.  Re-point it at our own buffer.
+         * copied.  Each copy must own its own cluster buffer:
+         *
+         *  - buffer_ is NOT copy-constructed.  minstd::heap_buffer has no copy constructor of
+         *    its own, so the implicit one duplicates the pointer - both iterators would then
+         *    read the same block, and both destructors would free it.
+         *
+         *  - The cluster is read straight into buffer_.data(), which never advances the
+         *    buffer's logical size, so the whole cluster is copied explicitly.
+         *
+         *  - directory_entries_ is a cached pointer into buffer_, so it is pointed at the new
+         *    block rather than copied from the source.
          *
          * @param itr_to_copy The iterator to copy from.
          */
@@ -1107,13 +1115,14 @@ namespace filesystems::fat32
         iterator_base(const iterator_base &itr_to_copy)
             : directory_cluster_(itr_to_copy.directory_cluster_),
               location_(itr_to_copy.location_),
-              buffer_(itr_to_copy.buffer_),
+              buffer_(__os_dynamic_heap_resource, itr_to_copy.directory_cluster_.block_io_adapter_.BytesPerCluster()),
               buffer_is_empty_(itr_to_copy.buffer_is_empty_),
               current_entry_(itr_to_copy.current_entry_),
               directory_entries_(buffer_.data())
         {
+            memcpy(buffer_.data(), itr_to_copy.buffer_.data(), directory_cluster_.block_io_adapter_.BytesPerCluster());
         }
-
+        
         /**
          * Advances the current entry in the FAT32 directory cluster.
          *

@@ -17,4 +17,3 @@ endif
 .PHONY: test coverage asan
 test coverage asan:
 	@$(MAKE) -f Makefile.test.mk $@
-	

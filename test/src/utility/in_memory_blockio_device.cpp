@@ -69,6 +69,11 @@ namespace ut_utility
             requests_before_read_error_--;
         }
 
+        if ((block_number >= size_in_blocks_) || (blocks_to_read > (size_in_blocks_ - block_number)))
+        {
+            return Result::Failure(BlockIOResultCodes::EMMC_INVALID_STORAGE_OFFSET);
+        }
+
         memmove(buffer, &(in_memory_file_[block_number]), blocks_to_read * BlockSize());
 
         return Result::Success(blocks_to_read);
@@ -92,6 +97,11 @@ namespace ut_utility
             }
 
             requests_before_write_error_--;
+        }
+
+        if ((block_number >= size_in_blocks_) || (blocks_to_write > (size_in_blocks_ - block_number)))
+        {
+            return Result::Failure(BlockIOResultCodes::EMMC_INVALID_STORAGE_OFFSET);
         }
 
         memmove(&(in_memory_file_[block_number]), buffer, blocks_to_write * BlockSize());

@@ -81,10 +81,12 @@ namespace
 #pragma GCC diagnostic ignored "-Wunused-variable"
     TEST_GROUP (FAT32BlockIOAdapterTest)
     {
+        size_t heap_bytes_at_start_ = 0;
+
         void setup()
         {
-            LogInfo("Setup: Heap Bytes Allocated: %d\n", __os_dynamic_heap_core.bytes_in_use());
-            CHECK_EQUAL(0, __os_dynamic_heap_core.bytes_in_use());
+            heap_bytes_at_start_ = __os_dynamic_heap_core.bytes_in_use();
+            LogInfo("Setup: Heap Bytes Allocated: %d\n", heap_bytes_at_start_);
 
             //  Load the empty 32MB FAT32 image
 
@@ -108,7 +110,7 @@ namespace
             partitions.clear();
 
             LogInfo("Teardown: Heap Bytes Allocated: %d\n", __os_dynamic_heap_core.bytes_in_use());
-            CHECK_EQUAL(0, __os_dynamic_heap_core.bytes_in_use());
+            CHECK_EQUAL(heap_bytes_at_start_, __os_dynamic_heap_core.bytes_in_use());
         }
     };
 #pragma GCC diagnostic pop

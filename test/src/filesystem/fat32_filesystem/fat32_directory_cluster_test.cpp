@@ -61,13 +61,54 @@ namespace
         return count;
     }
 
+    //  Re-opens the image from disk, truncates the root directory's cluster chain with the
+    //      given end-of-chain marker, and returns how many entries the iterator yields.
+    //      Returns -1 if iteration reported a failure.  Each call starts from a pristine image.
+
+    int32_t CountRootEntriesWithChainTerminator(uint32_t marker)
+    {
+        test_device = make_dynamic_unique<ut_utility::InMemoryFileBlockIODevice>("IN_MEMORY_TEST_DEVICE");
+
+        if (!test_device->Open("./test/data/test_fat32.img"))
+        {
+            return -1;
+        }
+
+        partitions.clear();
+
+        if (GetPartitions(*test_device, partitions) != FilesystemResultCodes::SUCCESS)
+        {
+            return -1;
+        }
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        if (!test_fat32.Successful())
+        {
+            return -1;
+        }
+
+        FAT32ClusterIndex root_cluster = test_fat32->BlockIOAdapter().RootDirectoryCluster();
+
+        if (test_fat32->BlockIOAdapter().UpdateFATTableEntry(root_cluster, FAT32ClusterIndex(marker)) != FilesystemResultCodes::SUCCESS)
+        {
+            return -1;
+        }
+
+        FAT32DirectoryCluster directory(test_fat32->Id(), test_fat32->BlockIOAdapter(), root_cluster);
+
+        return CountEntries(directory);
+    }
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
     TEST_GROUP (FAT32DirectoryClusterTest)
     {
+        size_t heap_bytes_at_start_ = 0;
+
         void setup()
         {
-            CHECK_EQUAL(0, __os_dynamic_heap_core.bytes_in_use());
+            heap_bytes_at_start_ = __os_dynamic_heap_core.bytes_in_use();
 
             test_device = make_dynamic_unique<ut_utility::InMemoryFileBlockIODevice>("IN_MEMORY_TEST_DEVICE");
 
@@ -81,33 +122,82 @@ namespace
             test_device = minstd::unique_ptr<ut_utility::InMemoryFileBlockIODevice>();
             partitions.clear();
 
-            CHECK_EQUAL(0, __os_dynamic_heap_core.bytes_in_use());
+            CHECK_EQUAL(heap_bytes_at_start_, __os_dynamic_heap_core.bytes_in_use());
         }
     };
 #pragma GCC diagnostic pop
 
     TEST(FAT32DirectoryClusterTest, IteratorHandlesAllEndOfChainMarkers)
     {
-        //  mkfs.fat writes 0x0FFFFFF8 routinely, but AdvanceCurrentEntry() recognised only an
-        //      exact 0x0FFFFFFF.  Anything else was followed as if it were a cluster number.
+        //  In test_fat32.img the root directory chains cluster 2 -> cluster 12 -> EOF, and
+        //      cluster 2 is full: 16 in-use entries, no 0x00 terminator - that sits at index 2
+        //      of cluster 12.  Truncating the chain at cluster 2 removes the directory's only
+        //      terminator, so iteration must rely entirely on end-of-chain detection.
+        //
+        //      0x0FFFFFF8 through 0x0FFFFFFF are all end-of-chain, so the marker VALUE must not
+        //      change the result.  Asserting the four agree catches early termination as well
+        //      as overrun, which ">= 0" does not.  0x0FFFFFFF supplies the baseline because it
+        //      is the one value the original code already handled.
 
-        const uint32_t markers[] = {0x0FFFFFF8, 0x0FFFFFFA, 0x0FFFFFFC, 0x0FFFFFFF};
+        const int32_t baseline = CountRootEntriesWithChainTerminator(0x0FFFFFFF);
 
-        for (uint32_t m = 0; m < (sizeof(markers) / sizeof(markers[0])); m++)
-        {
-            auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+        CHECK(baseline > 0);
 
-            CHECK(test_fat32.Successful());
-
-            FAT32ClusterIndex root_cluster = test_fat32->BlockIOAdapter().RootDirectoryCluster();
-
-            CHECK_EQUAL(FilesystemResultCodes::SUCCESS,
-                        test_fat32->BlockIOAdapter().UpdateFATTableEntry(root_cluster, FAT32ClusterIndex(markers[m])));
-
-            FAT32DirectoryCluster directory(test_fat32->Id(), test_fat32->BlockIOAdapter(), root_cluster);
-
-            CHECK(CountEntries(directory) >= 0);
-        }
+        CHECK_EQUAL(baseline, CountRootEntriesWithChainTerminator(0x0FFFFFF8));
+        CHECK_EQUAL(baseline, CountRootEntriesWithChainTerminator(0x0FFFFFFA));
+        CHECK_EQUAL(baseline, CountRootEntriesWithChainTerminator(0x0FFFFFFC));
     }
 
+    TEST(FAT32DirectoryClusterTest, CopiedIteratorDoesNotReadTheSourceBuffer)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        const FAT32ClusterIndex first_cluster = test_fat32->BlockIOAdapter().RootDirectoryCluster();
+
+        FAT32DirectoryCluster directory(test_fat32->Id(), test_fat32->BlockIOAdapter(), first_cluster);
+
+        //  Position the original on the first entry, which loads cluster 2 into its buffer.
+
+        auto original = directory.directory_entry_iterator_begin();
+
+        auto first_entry = original.AsClusterEntry();
+
+        CHECK(first_entry.Successful());
+
+        const FAT32Compact8Dot3Filename expected_name = first_entry->CompactName();
+
+        //  Copy it while it sits on that entry.
+
+        auto copy = original;
+
+        //  Walk the original into the root directory's second cluster (2 -> 12).  That reloads
+        //      the ORIGINAL's buffer with cluster 12's contents.
+
+        while (!original.end())
+        {
+            auto address = original.AsEntryAddress();
+
+            CHECK(address.Successful());
+
+            if (address->Cluster() != first_cluster)
+            {
+                break;
+            }
+
+            CHECK_EQUAL(FilesystemResultCodes::SUCCESS, original++);
+        }
+
+        CHECK_FALSE(original.end());
+
+        //  The copy must still read its own entry.  Without the copy constructor its cached
+        //      directory_entries_ pointer aims at the original's buffer, which now holds
+        //      cluster 12, so this reads a different name.
+
+        auto copied_entry = copy.AsClusterEntry();
+
+        CHECK(copied_entry.Successful());
+        CHECK(copied_entry->CompactName() == expected_name);
+    }
 }

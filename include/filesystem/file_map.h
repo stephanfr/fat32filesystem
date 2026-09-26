@@ -107,10 +107,12 @@ namespace filesystems
             return Result::Success(*(minstd::get<1>(*itr)));
         }
 
+#ifdef INCLUDE_TEST_HELPERS
         void Clear()
         {
             open_files_.clear();
         }
+#endif
 
     private:
         //  Anything beyond READ is a writer.

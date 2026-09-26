@@ -376,6 +376,21 @@ namespace filesystems::fat32
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
+        //  Insure the directory still exists, if not return a directory not found error
+
+        FAT32DirectoryCluster directory_cluster = FAT32DirectoryCluster(filesystem.Id(),
+                                                                block_io_adapter,
+                                                                FAT32ClusterIndex(0));
+
+        auto cluster_entry = directory_cluster.GetClusterEntry(entry_address_);
+
+        ReturnOnFailure(cluster_entry);
+
+        if (cluster_entry->IsUnused() || !cluster_entry->IsDirectoryEntry())
+        {
+            return FilesystemResultCodes::DIRECTORY_NOT_FOUND;
+        }
+
         //  A directory must be empty before it may be removed.  Releasing the chain of a
         //      populated directory strands every descendant's clusters - they stay marked
         //      allocated in the FAT with nothing referencing them.
@@ -407,24 +422,6 @@ namespace filesystems::fat32
         //  Remove any entry from the cache first
 
         filesystem.DirectoryCache().RemoveEntry(first_cluster_);
-
-        //  We have to write a 0x53 value into the first byte of the parent directory entry for this directory.
-        //      We can use the directory entry address.
-
-        FAT32DirectoryCluster directory_cluster = FAT32DirectoryCluster(filesystem.Id(),
-                                                                        block_io_adapter,
-                                                                        FAT32ClusterIndex(0));
-
-        //  Insure the directory still exists, if not return a directory not found error
-
-        auto cluster_entry = directory_cluster.GetClusterEntry(entry_address_);
-
-        ReturnOnFailure(cluster_entry);
-
-        if (cluster_entry->IsUnused() || !cluster_entry->IsDirectoryEntry())
-        {
-            return FilesystemResultCodes::DIRECTORY_NOT_FOUND;
-        }
 
         //  Remove the directory cluster entry
 

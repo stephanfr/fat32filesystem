@@ -4,8 +4,11 @@
 
 #pragma once
 
-#include <stddef.h>
+// AFTER
 #include <stdint.h>
+#include <algorithm>
+
+#include "os_config.h"
 
 //
 //  FAT32 Dates and Times
@@ -115,6 +118,8 @@ namespace filesystems::fat32
         } PACKED;
     } PACKED;
 
+    static_assert(sizeof(FAT32Date) == 2, "FAT32Date must match the 16-bit on-disk date field");
+
     /**
      * @class FAT32Time
      * @brief Represents a time value in the FAT32 file system.
@@ -219,6 +224,8 @@ namespace filesystems::fat32
         } PACKED;
     } PACKED;
 
+    static_assert(sizeof(FAT32Time) == 2, "FAT32Time must match the 16-bit on-disk time field");
+
     /**
      * @class FAT32TimeHundredths
      * @brief Represents the hundredths of a second in a FAT32 time value.
@@ -278,4 +285,6 @@ namespace filesystems::fat32
     private:
         uint8_t hundredths_;
     } PACKED;
+
+    static_assert(sizeof(FAT32TimeHundredths) == 1, "FAT32TimeHundredths must match the 8-bit on-disk field");
 }

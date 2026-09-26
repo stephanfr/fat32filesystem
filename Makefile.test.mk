@@ -100,3 +100,8 @@ asan: TEST_CPP_FLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
 asan: TEST_OPTIMIZATION_FLAGS = -O1
 asan: LDFLAGS += -fsanitize=address,undefined
 asan: test
+
+#  Optional: merged per-file coverage for sources AND headers.  Requires `pip install gcovr`.
+.PHONY: coverage-full
+coverage-full: coverage
+	gcovr -r . --filter 'src/' --filter 'include/' $(TEST_BUILD_ROOT)
