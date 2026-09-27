@@ -123,12 +123,19 @@ namespace
 
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*first)->RemoveDirectory());
 
+        //  FindNextEmptyCluster starts AT the last cluster it handed out, so OLDDIR's just-freed
+        //      cluster would go straight to NEWDIR.  Then the stale handle's entry address AND
+        //      first cluster both match NEWDIR, and no on-disk check can tell them apart.
+        //      Occupy it, as if something else had been allocated in between - the case the
+        //      identity check exists for.
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS,
+                    test_fs.Adapter().UpdateFATTableEntry(olddir_cluster, FAT32EntryAllocatedAndEndOfFile));
+
         //  idx 2 is now 0xE5 with free space behind it, so the next 8.3 directory reuses
-        //      idx 2 - the address the stale handle still holds.  Its first cluster differs,
-        //      because FindNextEmptyCluster searches from its high-water mark.
+        //      idx 2 - the address the stale handle still holds - with a different cluster.
 
         auto newdir = root->CreateDirectory(minstd::fixed_string<>("NEWDIR"));
-
         CHECK(newdir.Successful());
 
         const FAT32ClusterIndex newdir_cluster = static_cast<FAT32Directory *>(newdir.Value().get())->FirstCluster();

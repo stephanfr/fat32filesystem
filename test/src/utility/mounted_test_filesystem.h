@@ -75,7 +75,6 @@ namespace ut_utility
         {
             if (filesystem_ != nullptr)
             {
-                //  VERIFY: registry removal method name.
                 GetOSEntityRegistry().RemoveEntityById(filesystem_uuid_);
                 filesystem_ = nullptr;
             }

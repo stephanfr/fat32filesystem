@@ -10,10 +10,6 @@ else
 include Makefile.aarch64.mk
 endif
 
-#  The test, coverage and sanitizer builds are defined in Makefile.test.mk, which includes the
-#      native toolchain.  This file includes the aarch64 toolchain, where none of the test or
-#      coverage variables exist - so it must only delegate, never pass flags of its own.
-
-.PHONY: test coverage asan
-test coverage asan:
+.PHONY: test coverage asan coverage-full
+test coverage asan coverage-full:
 	@$(MAKE) -f Makefile.test.mk $@
