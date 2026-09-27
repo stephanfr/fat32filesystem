@@ -68,10 +68,6 @@ namespace ut_utility
             filesystem_ = mounted.Value().get();
             filesystem_uuid_ = mounted->Id();
 
-            //  VERIFY: confirm the registry's add method name and signature against
-            //      RPIBareMetalOS include/services/os_entity_registry.h.  It takes ownership
-            //      of the OSEntity, which is why filesystem_ is a raw observer pointer below.
-
             return Successful(GetOSEntityRegistry().AddEntity(mounted.Value()));
         }
 

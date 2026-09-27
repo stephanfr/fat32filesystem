@@ -17,6 +17,33 @@ namespace
 
     ut_utility::MountedTestFilesystem test_fs;
 
+    //  Counts long filename entries still marked in use inside one directory cluster.
+    //      Attribute 0x0F marks an LFN entry; byte 0 of 0xE5 marks it deleted and 0x00 marks
+    //      the end of the directory.
+
+    uint32_t CountLiveLFNEntries(FAT32ClusterIndex cluster)
+    {
+        minstd::heap_buffer<uint8_t> buffer(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(cluster, buffer.data()));
+
+        const uint32_t entries_per_cluster = test_fs.Adapter().BytesPerCluster() / 32;
+
+        uint32_t count = 0;
+
+        for (uint32_t i = 0; i < entries_per_cluster; i++)
+        {
+            const uint8_t *entry = buffer.data() + (i * 32);
+
+            if ((entry[11] == 0x0F) && (entry[0] != 0xE5) && (entry[0] != 0x00))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
     TEST_GROUP (FAT32DirectoryTest)
@@ -69,5 +96,53 @@ namespace
 
         CHECK(after.Successful());
         CHECK_EQUAL((uint32_t)before.Value(), (uint32_t)after.Value());
+    }
+
+    TEST(FAT32DirectoryTest, StaleDirectoryHandleCannotRemoveTheDirectoryThatReusedItsSlot)
+    {
+        auto root = test_fs.RootDirectory();
+
+        const FAT32ClusterIndex root_cluster = test_fs.Adapter().RootDirectoryCluster();
+
+        auto second_cluster = test_fs.Adapter().NextClusterInChain(root_cluster);      //  cluster 12
+
+        CHECK(second_cluster.Successful());
+
+        //  Root cluster 2 is full and cluster 12 has idx 0-1 in use, so an 8.3 directory
+        //      (which needs a 2-slot hole) lands at cluster 12 idx 2.
+
+        CHECK(root->CreateDirectory(minstd::fixed_string<>("OLDDIR")).Successful());
+
+        auto first = root->GetDirectory(minstd::fixed_string<>("OLDDIR"));
+        auto stale = root->GetDirectory(minstd::fixed_string<>("OLDDIR"));
+
+        CHECK(first.Successful());
+        CHECK(stale.Successful());
+
+        const FAT32ClusterIndex olddir_cluster = static_cast<FAT32Directory *>(stale.Value().get())->FirstCluster();
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*first)->RemoveDirectory());
+
+        //  idx 2 is now 0xE5 with free space behind it, so the next 8.3 directory reuses
+        //      idx 2 - the address the stale handle still holds.  Its first cluster differs,
+        //      because FindNextEmptyCluster searches from its high-water mark.
+
+        auto newdir = root->CreateDirectory(minstd::fixed_string<>("NEWDIR"));
+
+        CHECK(newdir.Successful());
+
+        const FAT32ClusterIndex newdir_cluster = static_cast<FAT32Directory *>(newdir.Value().get())->FirstCluster();
+
+        //  Premise: the slot really was reused, by a directory with a different first cluster.
+
+        minstd::heap_buffer<uint8_t> raw_cluster(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(*second_cluster, raw_cluster.data()));
+        CHECK(memcmp(raw_cluster.data() + (2 * 32), "NEWDIR     ", 11) == 0);
+        CHECK((uint32_t)newdir_cluster != (uint32_t)olddir_cluster);
+
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, (*stale)->RemoveDirectory());
+
+        CHECK(root->GetDirectory(minstd::fixed_string<>("NEWDIR")).Successful());
     }
 }

@@ -386,7 +386,11 @@ namespace filesystems::fat32
 
         ReturnOnFailure(cluster_entry);
 
-        if (cluster_entry->IsUnused() || !cluster_entry->IsDirectoryEntry())
+        //  The slot may have been reused by a different directory since this handle was
+        //      opened.  The first cluster is what identifies *this* directory.
+
+        if (cluster_entry->IsUnused() || !cluster_entry->IsDirectoryEntry() ||
+            (cluster_entry->FirstCluster(block_io_adapter.RootDirectoryCluster()) != first_cluster_))
         {
             return FilesystemResultCodes::DIRECTORY_NOT_FOUND;
         }
