@@ -13,6 +13,16 @@
 
 namespace filesystems::fat32
 {
+    namespace
+    {
+        //  FAT names compare case-insensitively.
+
+        bool NameMatches(const minstd::string &name, const char *filter, size_t filter_length)
+        {
+            return (name.size() == filter_length) && (strnicmp(name.data(), filter, filter_length) == 0);
+        }
+    }
+
     FAT32LongFilenameClusterEntry::FAT32LongFilenameClusterEntry(const minstd::string &filename_fragment,
                                                                  uint32_t sequence_number,
                                                                  bool first_entry,
@@ -312,13 +322,13 @@ namespace filesystems::fat32
             }
         }
 
-        //  Insure the filename is not already in use
+        //  Names are unique within a directory whatever the entry type, against both long names and 8.3 aliases.
 
-        auto existing_file = FindDirectoryEntry(FAT32DirectoryEntryAttributeToType(attributes), long_filename);
+        auto name_in_use = IsNameInUse(long_filename);
 
-        ReturnOnFailure(existing_file);
+        ReturnOnFailure(name_in_use);
 
-        if (!existing_file->end()) //  We found a matching filename
+        if (*name_in_use)
         {
             return Result::Failure(FilesystemResultCodes::FILENAME_ALREADY_IN_USE);
         }
@@ -343,7 +353,34 @@ namespace filesystems::fat32
 
             short_filename = long_filename.GetBasisName();
 
-            ReturnOnCallFailure(InsureShortFilenameDoesNotConflict(short_filename));
+            //  A basis that needed no tail is used as-is when it is free.  Otherwise it needs one -
+            //      and the tail search only recognises names that already carry a tail, so start
+            //      it with a provisional ~1.
+
+            if (!short_filename.NumericTail().has_value())
+            {
+                minstd::fixed_string<16> basis(short_filename.Name());
+
+                if (!short_filename.Extension().empty())
+                {
+                    basis += ".";
+                    basis += short_filename.Extension();
+                }
+
+                auto basis_in_use = IsNameInUse(basis.c_str());
+
+                ReturnOnFailure(basis_in_use);
+
+                if (*basis_in_use)
+                {
+                    short_filename.AddNumericTail(1);
+                }
+            }
+
+            if (short_filename.NumericTail().has_value())
+            {
+                ReturnOnCallFailure(InsureShortFilenameDoesNotConflict(short_filename));
+            }
 
             CreateLFNSequenceForFilename(long_filename, short_filename.Checksum(), lfn_entries);
         }
@@ -363,13 +400,27 @@ namespace filesystems::fat32
                                                  date_of_last_write,
                                                  size);
 
-        auto new_directory_entry = WriteLFNSequenceAndClusterEntry(cluster_entry, lfn_entries);
+        auto new_entry_address = WriteLFNSequenceAndClusterEntry(cluster_entry, lfn_entries);
 
-        ReturnOnFailure(new_directory_entry);
+        ReturnOnFailure(new_entry_address);
 
-        //  Return the directory entry
+        //  Read the new entry back through the normal lookup: the iterator has to walk the LFN run
+        //      to report the long name, and everything else must come from disk, not from memory.
 
-        return new_directory_entry;
+        auto new_entry = FindDirectoryEntry(FAT32DirectoryEntryAttributeToType(attributes), long_filename);
+
+        ReturnOnFailure(new_entry);
+
+        auto found_address = new_entry->AsEntryAddress();
+
+        ReturnOnFailure(found_address);
+
+        if ((found_address->Cluster() != new_entry_address->Cluster()) || (found_address->Index() != new_entry_address->Index()))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_CURRENT_DIRECTORY_ENTRY_IS_INVALID);
+        }
+
+        return new_entry->AsDirectoryEntry();
     }
 
     ValueResult<FilesystemResultCodes, FilesystemDirectoryEntry> FAT32DirectoryCluster::CreateEntry(const minstd::string &name,
@@ -637,10 +688,10 @@ namespace filesystems::fat32
         return FilesystemResultCodes::SUCCESS;
     }
 
-    ValueResult<FilesystemResultCodes, FilesystemDirectoryEntry> FAT32DirectoryCluster::WriteLFNSequenceAndClusterEntry(const FAT32DirectoryClusterEntry &cluster_entry,
+    ValueResult<FilesystemResultCodes, FAT32DirectoryEntryAddress> FAT32DirectoryCluster::WriteLFNSequenceAndClusterEntry(const FAT32DirectoryClusterEntry &cluster_entry,
                                                                                                                         const minstd::vector<FAT32LongFilenameClusterEntry> &lfn_entries)
     {
-        using Result = ValueResult<FilesystemResultCodes, FilesystemDirectoryEntry>;
+        using Result = ValueResult<FilesystemResultCodes, FAT32DirectoryEntryAddress>;
 
         LogEntryAndExit("Entering\n");
 
@@ -765,16 +816,7 @@ namespace filesystems::fat32
 
         //  Get and return the directory entry
 
-        directory_entry_const_iterator new_entry_itr(directory_entry_const_iterator(*this,
-                                                                                    directory_entry_const_iterator::Location::MID,
-                                                                                    block_io_adapter_.BytesPerCluster(),
-                                                                                    FAT32DirectoryEntryAddress(directory_cluster_index, directory_entry_index)));
-
-        auto new_directory_entry = new_entry_itr.AsDirectoryEntry();
-
-        ReturnOnFailure(new_directory_entry);
-
-        return Result::Success(*new_directory_entry);
+        return Result::Success(FAT32DirectoryEntryAddress(directory_cluster_index, directory_entry_index));
     }
 
     FilesystemResultCodes FAT32DirectoryCluster::AddNewCluster()
@@ -946,14 +988,23 @@ namespace filesystems::fat32
 
                 if (name_filter != nullptr)
                 {
+                    //  An entry answers to its long name and to its 8.3 alias (e.g. LOREMI~1.TEX).
+
                     itr.GetNameInternal(filename);
 
-                    //  Case insensitive comparison
-
-                    if (filename.size() != name_filter_length ? false : (strnicmp(filename.data(), name_filter, name_filter_length) == 0))
+                    if (NameMatches(filename, name_filter, name_filter_length))
                     {
-
                         return Result::Success(itr);
+                    }
+
+                    if (!entry.IsVolumeInformationEntry())
+                    {
+                        entry.Compact8Dot3Filename(filename);
+
+                        if (NameMatches(filename, name_filter, name_filter_length))
+                        {
+                            return Result::Success(itr);
+                        }
                     }
                 }
                 else
@@ -994,6 +1045,29 @@ namespace filesystems::fat32
 
             lfn_entries.push_back(FAT32LongFilenameClusterEntry(filename_fragment, i + 1, ((uint32_t)i == (num_entries - 1)), checksum));
         }
+    }
+
+    ValueResult<FilesystemResultCodes, bool> FAT32DirectoryCluster::IsNameInUse(const char *name)
+    {
+        using Result = ValueResult<FilesystemResultCodes, bool>;
+
+        //  Files and directories share one namespace; volume labels are not names.
+
+        const FilesystemDirectoryEntryType types[] = {FilesystemDirectoryEntryType::FILE, FilesystemDirectoryEntryType::DIRECTORY};
+
+        for (const FilesystemDirectoryEntryType type : types)
+        {
+            auto existing = FindDirectoryEntry(type, name);
+
+            ReturnOnFailure(existing);
+
+            if (!existing->end())
+            {
+                return Result::Success(true);
+            }
+        }
+
+        return Result::Success(false);
     }
 
     //

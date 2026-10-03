@@ -390,4 +390,127 @@ namespace
         CHECK(test_fs.ReadRawCluster(test_fs.Adapter().RootDirectoryCluster(), buffer.data()));
         CHECK(memcmp(buffer.data() + (3 * 32), "NEWDIR     ", 11) == 0);
     }
+
+    TEST(FAT32DirectoryTest, FilesAndDirectoriesShareOneNamespace)
+    {
+        auto root = test_fs.RootDirectory();
+
+        auto file = root->OpenFile(minstd::fixed_string<>("SUBDIR1"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK_EQUAL(FilesystemResultCodes::FILENAME_ALREADY_IN_USE, file.ResultCode());
+    }
+
+    TEST(FAT32DirectoryTest, FileCanBeOpenedByItsShortAlias)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        auto file = (*subdir)->OpenFile(minstd::fixed_string<>("LOREMI~1.TEX"), FileModes::READ);
+
+        CHECK(file.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+    }
+
+    TEST(FAT32DirectoryTest, ShortAliasesStayUnique)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir3 = root->GetDirectory(minstd::fixed_string<>("SUBDIR3"));     //  empty, cluster 5
+
+        CHECK(subdir3.Successful());
+
+        auto first = (*subdir3)->OpenFile(minstd::fixed_string<>("README~1.TXT"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+        CHECK(first.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*first)->Close());
+
+        auto second = (*subdir3)->OpenFile(minstd::fixed_string<>("readme.txt"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+        CHECK(second.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*second)->Close());
+
+        //  Count live short entries named README~1.TXT in SUBDIR3's cluster.
+
+        minstd::heap_buffer<uint8_t> buffer(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(5), buffer.data()));
+
+        uint32_t matches = 0;
+
+        for (uint32_t i = 0; i < test_fs.Adapter().BytesPerCluster() / 32; i++)
+        {
+            const uint8_t *entry = buffer.data() + (i * 32);
+
+            if ((entry[11] != 0x0F) && (entry[0] != 0xE5) && (entry[0] != 0x00) && (memcmp(entry, "README~1TXT", 11) == 0))
+            {
+                matches++;
+            }
+        }
+
+        CHECK_EQUAL(1, matches);
+    }
+
+    TEST(FAT32DirectoryTest, OpenFileIsProtectedUnderAnySpelling)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        auto reader = (*subdir)->OpenFile(minstd::fixed_string<MAX_FILENAME_LENGTH>("Lorem ipsum dolor sit amet.text"), FileModes::READ);
+
+        CHECK(reader.Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY,
+                    (*subdir)->DeleteFile(minstd::fixed_string<MAX_FILENAME_LENGTH>("LOREM IPSUM DOLOR SIT AMET.TEXT")));
+        CHECK_EQUAL(FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY,
+                    (*subdir)->DeleteFile(minstd::fixed_string<>("LOREMI~1.TEX")));
+        CHECK_FALSE((*subdir)->OpenFile(minstd::fixed_string<MAX_FILENAME_LENGTH>("lorem ipsum dolor sit amet.text"), FileModes::WRITE).Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*reader)->Close());
+    }
+
+    TEST(FAT32DirectoryTest, CreatedFileReportsItsOnDiskEntry)
+    {
+        auto root = test_fs.RootDirectory();
+
+        auto file = root->OpenFile(minstd::fixed_string<>("rootfile.txt"),
+                                   static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK(file.Successful());
+
+        //  The new file's entry must be the one written to disk: long name, size 0.
+
+        auto name = (*file)->Filename();
+
+        CHECK(name.Successful());
+        STRCMP_EQUAL("rootfile.txt", name->c_str());
+
+        auto entry = (*file)->DirectoryEntry();
+
+        CHECK(entry.Successful());
+        CHECK_EQUAL(0U, entry->Size());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+    }
+
+    TEST(FAT32DirectoryTest, RemovingAParentReachedThroughDotDotDeletesItsRealEntry)
+    {
+        auto root = test_fs.RootDirectory();
+
+        auto parent = root->CreateDirectory(minstd::fixed_string<>("PARENT"));
+        CHECK(parent.Successful());
+
+        auto child = (*parent)->CreateDirectory(minstd::fixed_string<>("CHILD"));
+        CHECK(child.Successful());
+
+        auto parent_via_dot_dot = (*child)->GetDirectory(minstd::fixed_string<>(".."));
+        CHECK(parent_via_dot_dot.Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*child)->RemoveDirectory());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*parent_via_dot_dot)->RemoveDirectory());
+
+        //  PARENT's entry in the root must be gone, not left pointing at freed clusters.
+
+        CHECK_FALSE(root->GetDirectory(minstd::fixed_string<>("PARENT")).Successful());
+    }
 }

@@ -894,4 +894,23 @@ namespace
 
         CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
     }
+
+    TEST(FAT32BlockIOAdapterTest, ChainMarkersAreNotClusterNumbers)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        FAT32BlockIOAdapter &adapter = test_fat32->BlockIOAdapter();
+
+        //  0x0FFFFFF7 (bad) and 0x0FFFFFF8+ (end of chain) are FAT values, never cluster numbers.
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE, adapter.NextClusterInChain(FAT32EntryDefective));
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE, adapter.NextClusterInChain(FAT32EntryAllocatedAndEndOfFile));
+        CHECK_EQUAL(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE, adapter.UpdateFATTableEntry(FAT32EntryDefective, FAT32EntryFree));
+
+        //  ...but they remain legal values to write.
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, adapter.UpdateFATTableEntry(FAT32ClusterIndex(40), FAT32EntryAllocatedAndEndOfFile));
+    }
 }

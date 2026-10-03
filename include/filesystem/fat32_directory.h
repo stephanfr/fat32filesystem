@@ -22,6 +22,9 @@
 namespace filesystems::fat32
 {
 
+    //  Forward declare the FAT32Filesystem class
+    class FAT32Filesystem;
+
     class FAT32Directory : public FilesystemDirectory
     {
     public:
@@ -250,10 +253,10 @@ namespace filesystems::fat32
         /**
          * Retrieves the ".." entry of the current directory.  The dot dot entry is a reference to the parent directory.
          *
-         * @param block_io_adapter The FAT32BlockIOAdapter used for block I/O operations.
+         * @param filesystem The FAT32Filesystem
          * @return A PointerResult object containing the result code and the FilesystemDirectory object representing the ".." entry on success.
          */
-        PointerResult<FilesystemResultCodes, FilesystemDirectory> GetDotDotEntry(FAT32BlockIOAdapter &block_io_adapter) const;
+        PointerResult<FilesystemResultCodes, FilesystemDirectory> GetDotDotEntry(FAT32Filesystem &filesystem) const;
 
         /**
          * Renames an entry in the FAT32 directory.

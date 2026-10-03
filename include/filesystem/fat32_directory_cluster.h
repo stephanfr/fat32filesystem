@@ -1066,10 +1066,18 @@ namespace filesystems::fat32
          *
          * @param cluster_entry The FAT32 directory cluster entry to write.
          * @param lfn_entries The vector of FAT32 long filename cluster entries to write.
-         * @return A ValueResult object containing the result code and the written directory entry.
+         * @return A ValueResult object containing the result code and the written directory entry address.
          */
-        ValueResult<FilesystemResultCodes, FilesystemDirectoryEntry> WriteLFNSequenceAndClusterEntry(const FAT32DirectoryClusterEntry &cluster_entry,
-                                                                                                     const minstd::vector<FAT32LongFilenameClusterEntry> &lfn_entries);
+        ValueResult<FilesystemResultCodes, FAT32DirectoryEntryAddress> WriteLFNSequenceAndClusterEntry(const FAT32DirectoryClusterEntry &cluster_entry,
+                                                                                                       const minstd::vector<FAT32LongFilenameClusterEntry> &lfn_entries);
+
+        /**
+         * @brief Checks if a given name is already in use within the directory cluster.
+         *
+         * @param name The name to check for usage.
+         * @return A ValueResult object containing the result code and a boolean indicating if the name is in use.
+         */
+        ValueResult<FilesystemResultCodes, bool> IsNameInUse(const char *name);
     };
 
     /**

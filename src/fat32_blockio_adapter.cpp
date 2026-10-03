@@ -349,7 +349,7 @@ namespace filesystems::fat32
 
         //  Insure we stay in the bounds of the FAT table.  We do have to be able to write a zero (FAT32EntryFree) to the FAT table though.
 
-        if (IsClusterOutOfRange(cluster) || ((new_value != FAT32EntryFree) && IsClusterOutOfRange(new_value)))
+        if (IsClusterOutOfRange(cluster) || !IsValidFATValue(new_value))
         {
             return FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE;
         }

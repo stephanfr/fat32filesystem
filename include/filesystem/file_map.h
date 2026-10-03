@@ -38,7 +38,7 @@ namespace filesystems
 
                 auto open_path = open_file.AbsolutePath();
 
-                if (!open_path.Successful() || !(*open_path == *path))
+                if (!open_path.Successful() || !SamePath(*open_path, *path))
                 {
                     continue;
                 }
@@ -84,7 +84,7 @@ namespace filesystems
             {
                 auto open_path = minstd::get<1>(*itr)->AbsolutePath();
 
-                if (open_path.Successful() && (*open_path == path))
+                if (open_path.Successful() && SamePath(*open_path, path))
                 {
                     return true;
                 }
@@ -120,6 +120,13 @@ namespace filesystems
         static bool IsExclusive(FileModes mode)
         {
             return (static_cast<uint32_t>(mode) & ~static_cast<uint32_t>(FileModes::READ)) != 0;
+        }
+
+        //  FAT names are case-insensitive: "/A/B.TXT" and "/a/b.txt" are the same file.
+
+        static bool SamePath(const minstd::string &lhs, const minstd::string &rhs)
+        {
+            return (lhs.size() == rhs.size()) && (strnicmp(lhs.c_str(), rhs.c_str(), lhs.size()) == 0);
         }
 
         //  One map, and it owns the files.

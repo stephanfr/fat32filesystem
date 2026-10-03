@@ -115,10 +115,8 @@ namespace filesystems::fat32
         return Result::Success(minstd::move(directory));
     }
 
-    PointerResult<FilesystemResultCodes, FilesystemDirectory> FAT32Directory::GetDotDotEntry(FAT32BlockIOAdapter &block_io_adapter) const
+    PointerResult<FilesystemResultCodes, FilesystemDirectory> FAT32Directory::GetDotDotEntry(FAT32Filesystem &filesystem) const
     {
-        using Result = PointerResult<FilesystemResultCodes, FilesystemDirectory>;
-
         //  There is no dot dot entry for the root directory
 
         if (IsRoot())
@@ -126,46 +124,11 @@ namespace filesystems::fat32
             return GetDotEntry();
         }
 
-        //  Get the dot dot entry
-
-        auto dot_dot_entry = GetEntry(block_io_adapter, minstd::fixed_string<>(".."), FilesystemDirectoryEntryType::DIRECTORY);
-
-        ReturnOnFailure(dot_dot_entry);
+        //  Get the dot dot entry, which is the parent directory.
 
         minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> parent_path;
 
-        //  Get the parent path from the current absolute path.
-        //      If we are currently in the root directory, then there is no parent so just return the root directory again.
-
-        size_t last_slash = path_.find_last_of('/');
-
-        if (last_slash != minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>::npos)
-        {
-            if (last_slash != 0)
-            {
-                path_.substr(parent_path, 0, last_slash);
-            }
-            else
-            {
-                parent_path = "/";
-            }
-        }
-        else
-        {
-            //  We should never get here.
-
-            return Result::Failure(FilesystemResultCodes::ILLEGAL_PATH);
-        }
-
-        //  Create the directory object and return it
-
-        minstd::unique_ptr<FilesystemDirectory> directory(AsFilesystemDirectory(FilesystemUUID(),
-                                                                                parent_path,
-                                                                                GetOpaqueData(*dot_dot_entry).directory_entry_address_,
-                                                                                GetOpaqueData(*dot_dot_entry).FirstCluster(),
-                                                                                FAT32Compact8Dot3Filename("..", "")));
-
-        return Result::Success(minstd::move(directory));
+        return filesystem.GetDirectory(parent_path);
     }
 
     PointerResult<FilesystemResultCodes, FilesystemDirectory> FAT32Directory::GetDirectory(const minstd::string &directory_name)
@@ -201,7 +164,7 @@ namespace filesystems::fat32
 
         if (directory_name == "..")
         {
-            return GetDotDotEntry(block_io_adapter);
+            return GetDotDotEntry(filesystem);
         }
 
         //  We need the full path - but there is a special case for the root directory, we do not add a forward slash.
@@ -470,10 +433,11 @@ namespace filesystems::fat32
 
         if (file_entry.Successful())
         {
-            //  File exists, so open it.  Get the full path first.
+            //  File exists, so open it.  Get the full path first and use the on-disk name
+            //      so we don't run into problems with different spellings (long, short, etc.) of the filename.
 
             minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> path(path_, __dynamic_string_allocator);
-            AppendToPath(path, filename);
+            AppendToPath(path, file_entry->Name());
 
             minstd::unique_ptr<File> file(static_cast<File *>(make_dynamic_unique<FAT32File>(FilesystemUUID(), *file_entry, path, mode, 0, 0).release()), __os_dynamic_heap_resource);
 
@@ -546,7 +510,7 @@ namespace filesystems::fat32
         ReturnOnFailure(new_file_directory_entry);
 
         minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> path(path_, __dynamic_string_allocator);
-        AppendToPath(path, filename);
+        AppendToPath(path, new_file_directory_entry->Name());
 
         minstd::unique_ptr<FAT32File> file(make_dynamic_unique<FAT32File>(FilesystemUUID(), *new_file_directory_entry, path, mode, 0, 0).release(), __os_dynamic_heap_resource);
 
@@ -651,8 +615,8 @@ namespace filesystems::fat32
 
         //  Insure the file is not open
 
-        minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path(path_);
-        AppendToPath(absolute_path, filename);
+        minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path(path_, __dynamic_string_allocator);
+        AppendToPath(absolute_path, file_entry->Name());
 
         if (GetFileMap().IsFileOpen(absolute_path))
         {
@@ -736,9 +700,8 @@ namespace filesystems::fat32
 
         if (entry_type == FilesystemDirectoryEntryType::FILE)
         {
-            minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path(path_);
-
-            AppendToPath(absolute_path, name);
+            minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path(path_, __dynamic_string_allocator);
+            AppendToPath(absolute_path, directory_entry->Name());
 
             if (GetFileMap().IsFileOpen(absolute_path))
             {

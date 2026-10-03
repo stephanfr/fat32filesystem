@@ -338,7 +338,18 @@ namespace filesystems::fat32
          */
         bool IsClusterOutOfRange(FAT32ClusterIndex cluster) const
         {
-            return ((cluster < FAT32ClusterIndex(2)) || ((cluster > MaximumClusterNumber()) && (cluster < FAT32EntryDefective)));
+            return ((cluster < FAT32ClusterIndex(2)) || (cluster > MaximumClusterNumber()));
+        }
+
+        /**
+         * Checks if the given FAT32 cluster value is a valid FAT entry.
+         * 
+         * @param value The FAT32 cluster value to check.
+         * @return True if the value is a valid FAT entry, false otherwise.
+         */
+        bool IsValidFATValue(FAT32ClusterIndex value) const
+        {
+            return (value == FAT32EntryFree) || !IsClusterOutOfRange(value) || (value >= FAT32EntryDefective);
         }
 
         /**
