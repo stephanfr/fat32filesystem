@@ -555,7 +555,13 @@ namespace filesystems::fat32
 
     FilesystemResultCodes FAT32Directory::SetDirectoryEntryFirstCluster(FAT32BlockIOAdapter &block_io_adapter, const FAT32DirectoryEntryAddress &address, FAT32ClusterIndex first_cluster)
     {
-        uint8_t block_buffer[block_io_adapter.BytesPerCluster()];
+        if (!IsEntryIndexInCluster(block_io_adapter, address))
+        {
+            return FilesystemResultCodes::FAT32_CURRENT_DIRECTORY_ENTRY_IS_INVALID;
+        }
+
+        minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter.BytesPerCluster());
+        uint8_t *block_buffer = cluster_buffer.data();
 
         //  Read the directory block
 
@@ -582,7 +588,13 @@ namespace filesystems::fat32
 
     FilesystemResultCodes FAT32Directory::UpdateDirectoryEntrySize(FAT32BlockIOAdapter &block_io_adapter, const FAT32DirectoryEntryAddress &address, uint32_t new_size)
     {
-        uint8_t block_buffer[block_io_adapter.BytesPerCluster()];
+        if (!IsEntryIndexInCluster(block_io_adapter, address))
+        {
+            return FilesystemResultCodes::FAT32_CURRENT_DIRECTORY_ENTRY_IS_INVALID;
+        }
+        
+        minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter.BytesPerCluster());
+        uint8_t *block_buffer = cluster_buffer.data();
 
         //  Read the directory block
 
@@ -719,6 +731,21 @@ namespace filesystems::fat32
 
         ReturnOnFailure(directory_entry);
 
+        //  An open file is tracked in FileMap by its path.  Renaming it under its handles would
+        //      orphan that key.
+
+        if (entry_type == FilesystemDirectoryEntryType::FILE)
+        {
+            minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path(path_);
+
+            AppendToPath(absolute_path, name);
+
+            if (GetFileMap().IsFileOpen(absolute_path))
+            {
+                return FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY;
+            }
+        }
+
         //  Create the new directory entry
 
         auto new_directory_entry = directory_cluster.CreateEntry(new_name,
@@ -731,7 +758,18 @@ namespace filesystems::fat32
 
         filesystem.DirectoryCache().RemoveEntry(GetOpaqueData(*directory_entry).FirstCluster());
 
-        ReturnOnCallFailure(directory_cluster.RemoveEntry(GetOpaqueData(*directory_entry).directory_entry_address_));
+        //  Both entries now reference the same cluster chain.  If the old one cannot be removed,
+        //      remove the new one rather than leave the chain cross-linked.  The rollback is best
+        //      effort: the caller needs the original failure, not the rollback's.
+
+        const FilesystemResultCodes remove_result = directory_cluster.RemoveEntry(GetOpaqueData(*directory_entry).directory_entry_address_);
+
+        if (remove_result != FilesystemResultCodes::SUCCESS)
+        {
+            directory_cluster.RemoveEntry(GetOpaqueData(*new_directory_entry).directory_entry_address_);
+
+            return remove_result;
+        }
 
         //  Finished with Success
 

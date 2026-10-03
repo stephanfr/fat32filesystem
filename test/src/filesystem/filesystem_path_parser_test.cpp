@@ -446,4 +446,15 @@ namespace
             CHECK(path.ResultCode() == FilesystemResultCodes::ILLEGAL_PATH);
         }
     }
+
+    TEST(FilesystemPathParser, RelativePathMayBeginWithAnyPrintableCharacter)
+    {
+        CHECK(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("_config")).Successful());
+        CHECK(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("$data/file")).Successful());
+
+        //  Still rejected: leading whitespace.
+
+        CHECK_FALSE(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>(" leading")).Successful());
+        CHECK_FALSE(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>(".hidden")).Successful());
+    }
 }

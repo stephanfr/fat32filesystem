@@ -304,7 +304,7 @@ namespace filesystems::fat32
          */
         void SetDirectoryEntryFlag(FAT32DirectoryEntryFlags flag)
         {
-            const_cast<char &>(compact_name_.name_[0]) = static_cast<char>(flag);
+            compact_name_.name_[0] = static_cast<char>(flag);
         }
 
         /**
@@ -571,6 +571,15 @@ namespace filesystems::fat32
     static_assert(sizeof(FAT32Compact8Dot3Filename) == 11);
 
     /**
+     * @brief True if the address's index lies inside one directory cluster on this volume.  Every
+     *        function that indexes a cluster buffer by an entry address must check this first.
+     */
+    inline bool IsEntryIndexInCluster(const FAT32BlockIOAdapter &block_io_adapter, const FAT32DirectoryEntryAddress &address)
+    {
+        return address.Index() < (block_io_adapter.BytesPerCluster() / sizeof(FAT32DirectoryClusterEntry));
+    }
+
+    /**
      * @class FAT32LongFilenameClusterEntry
      * @brief Represents a FAT32 long filename cluster entry
      *
@@ -648,6 +657,16 @@ namespace filesystems::fat32
         bool IsFirstLFNEntry() const noexcept
         {
             return ((sequence_number_.first_lfn_entry_ & 0x01) == 0x01);
+        }
+
+        /**
+         * @brief Retrieves the filename checksum for the current long filename entry.
+         *
+         * @return The filename checksum.
+         */
+        uint8_t FilenameChecksum() const noexcept
+        {
+            return filename_checksum_;
         }
 
         /**
@@ -821,7 +840,7 @@ namespace filesystems::fat32
         FAT32DirectoryClusterEntry directory_entry_;
     };
 
-    static_assert(sizeof(FAT32DirectoryEntryOpaqueData) < FilesystemDirectoryEntry::OPAQUE_DATA_BLOCK_SIZE_IN_BYTES);
+    static_assert(sizeof(FAT32DirectoryEntryOpaqueData) <= FilesystemDirectoryEntry::OPAQUE_DATA_BLOCK_SIZE_IN_BYTES);
 
     /**
      * @brief Retrieves the opaque data of a FAT32 directory entry.
@@ -1317,8 +1336,11 @@ namespace filesystems::fat32
         friend class test::FAT32DirectoryClusterDirectoryEntryIteratorHelper;
 #endif
 
-        FAT32LongFilenameClusterEntry lfn_entries_[22];
+        static constexpr uint32_t MAX_LFN_ENTRIES = 20;
+
+        FAT32LongFilenameClusterEntry lfn_entries_[MAX_LFN_ENTRIES];
         uint32_t next_lfn_entry_index_ = 0;
+        bool lfn_run_overflowed_ = false;
 
         /**
          * @brief Constructor for the directory entry iterator.
@@ -1357,10 +1379,40 @@ namespace filesystems::fat32
          */
         void AddLFNEntry(const FAT32LongFilenameClusterEntry &entry)
         {
-            if (next_lfn_entry_index_ < 21)
+            if (next_lfn_entry_index_ < MAX_LFN_ENTRIES)
             {
                 memcpy(lfn_entries_ + next_lfn_entry_index_++, &entry, sizeof(FAT32LongFilenameClusterEntry));
             }
+            else
+            {
+                lfn_run_overflowed_ = true;
+            }
+        }
+
+        void ResetLFNRun() noexcept
+        {
+            next_lfn_entry_index_ = 0;
+            lfn_run_overflowed_ = false;
+        }
+
+        bool LFNRunBelongsTo(const FAT32DirectoryClusterEntry &entry) const noexcept
+        {
+            if (lfn_run_overflowed_)
+            {
+                return false;
+            }
+
+            const uint8_t checksum = entry.CompactName().Checksum();
+
+            for (uint32_t i = 0; i < next_lfn_entry_index_; i++)
+            {
+                if (lfn_entries_[i].FilenameChecksum() != checksum)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /**

@@ -52,7 +52,7 @@ namespace filesystems::fat32
 
             if (name_block == 0)
             {
-                name1_[offset_within_block++] = filename_fragment.data()[i];
+                name1_[offset_within_block++] = static_cast<uint8_t>(filename_fragment.data()[i]);
 
                 if (offset_within_block < 5)
                 {
@@ -70,7 +70,7 @@ namespace filesystems::fat32
 
             if (name_block == 1)
             {
-                name2_[offset_within_block++] = filename_fragment.data()[i];
+                name2_[offset_within_block++] = static_cast<uint8_t>(filename_fragment.data()[i]);
 
                 if (offset_within_block < 6)
                 {
@@ -87,7 +87,7 @@ namespace filesystems::fat32
             //  Third and last block of 2 characters
             if (name_block == 2)
             {
-                name3_[offset_within_block++] = filename_fragment.data()[i];
+                name3_[offset_within_block++] = static_cast<uint8_t>(filename_fragment.data()[i]);
 
                 if (offset_within_block >= 2)
                 {
@@ -226,6 +226,7 @@ namespace filesystems::fat32
         do
         {
             uint32_t current_count_of_empty_entries = 0;
+            bool run_reaches_end_of_directory = false;
             FAT32DirectoryEntryAddress current_start_address;
 
             //  Iterate over the entries looking for a contiguous set of empty entries of the required length
@@ -247,11 +248,17 @@ namespace filesystems::fat32
                         ReturnOnFailure(entry_address);
 
                         current_start_address = *entry_address;
+                        run_reaches_end_of_directory = false;
                     }
+
+                    run_reaches_end_of_directory |= cluster_entry->IsUnusedAndEnd();
 
                     current_count_of_empty_entries++;
 
-                    if (current_count_of_empty_entries >= num_entries_required)
+                    //  A hole of deleted entries is used exactly.  A run that reaches the end of the
+                    //      directory needs one more slot for the new end-of-directory marker.
+
+                    if (current_count_of_empty_entries >= num_entries_required + (run_reaches_end_of_directory ? 1 : 0))
                     {
                         return Result::Success(current_start_address);
                     }
@@ -387,9 +394,15 @@ namespace filesystems::fat32
 
         LogEntryAndExit("Entering with cluster: %u, index: %u\n", address.cluster_, address.index_);
 
+        if (!IsEntryIndexInCluster(block_io_adapter_, address))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_CURRENT_DIRECTORY_ENTRY_IS_INVALID);
+        }
+
         //  Create a buffer for a cluster read
 
-        uint8_t buffer[block_io_adapter_.BytesPerCluster()];
+        minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter_.BytesPerCluster());
+        uint8_t *buffer = cluster_buffer.data();
 
         //  Read the directory cluster
 
@@ -407,9 +420,15 @@ namespace filesystems::fat32
     {
         using Result = FilesystemResultCodes;
 
+        if (!IsEntryIndexInCluster(block_io_adapter_, address))
+        {
+            return FilesystemResultCodes::FAT32_CURRENT_DIRECTORY_ENTRY_IS_INVALID;
+        }
+
         //  Create a buffer for a cluster read
 
-        uint8_t buffer[block_io_adapter_.BytesPerCluster()];
+        minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter_.BytesPerCluster());
+        uint8_t *buffer = cluster_buffer.data();
         FAT32DirectoryClusterTable cluster_table(buffer);
 
         FAT32DirectoryEntryAddress current_entry_address(address);
@@ -510,8 +529,6 @@ namespace filesystems::fat32
         LogEntryAndExit("Entering with filename: %s\n", short_filename.Compact8_3Filename().c_str());
 
         //  Search the directory to insure no other short filenames conflict
-
-        minstd::fixed_string<> entry_short_filename;
 
         bool continue_search = true;
         uint32_t offset = 0;
@@ -632,7 +649,7 @@ namespace filesystems::fat32
 
         FAT32DirectoryEntryAddress empty_entry_address;
 
-        auto empty_entries = FindEmptyBlockOfEntries(lfn_entries.size() + 2); //  2 just in case we nned to set the end of entries flag
+        auto empty_entries = FindEmptyBlockOfEntries(lfn_entries.size() + 1);
 
         ReturnOnFailure(empty_entries);
 
@@ -640,7 +657,8 @@ namespace filesystems::fat32
 
         //  Create a buffer for a cluster read
 
-        uint8_t buffer[block_io_adapter_.BytesPerCluster()];
+        minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter_.BytesPerCluster());
+        uint8_t *buffer = cluster_buffer.data();
 
         //  Read the directory cluster, update the entries and write the cluster back to the device
 
@@ -771,7 +789,8 @@ namespace filesystems::fat32
 
         //  Zero out the cluster
 
-        uint8_t block_buffer[block_io_adapter_.BytesPerCluster()];
+        minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter_.BytesPerCluster());
+        uint8_t *block_buffer = cluster_buffer.data();
 
         memset(block_buffer, 0, block_io_adapter_.BytesPerCluster());
 
@@ -827,7 +846,8 @@ namespace filesystems::fat32
     {
         //  Allocate a buffer for the cluster on the stack.
 
-        uint8_t block_buffer[block_io_adapter_.BytesPerCluster()];
+        minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter_.BytesPerCluster());
+        uint8_t *block_buffer = cluster_buffer.data();
 
         //  Zero out the entire buffer
 
@@ -1137,7 +1157,7 @@ namespace filesystems::fat32
 
         //  Reset the next_lfn_entry_index_
 
-        next_lfn_entry_index_ = 0;
+        ResetLFNRun();
 
         //  Loop through the entries in the cluster skipping deleted or bad entries but saving LFN entries
         //      and follow the directory cluster chain until we reach the end of the chain.
@@ -1146,6 +1166,13 @@ namespace filesystems::fat32
         {
             if (directory_entries_.ClusterEntry(current_entry_).IsStandardEntry())
             {
+                //  Orphaned LFN entries must not rename this entry - fall back to its 8.3 name.
+
+                if (!LFNRunBelongsTo(directory_entries_.ClusterEntry(current_entry_)))
+                {
+                    ResetLFNRun();
+                }
+
                 location_ = Location::MID;
                 return FilesystemResultCodes::SUCCESS;
             }
@@ -1155,11 +1182,11 @@ namespace filesystems::fat32
             }
             else
             {
-                //  If this is not an LFN entry, reset the lfn entry index;
+                //  Anything that is neither an LFN nor a standard entry breaks the run.
 
-                next_lfn_entry_index_ = 0;
+                ResetLFNRun();
             }
-
+            
             if (directory_entries_.ClusterEntry(current_entry_).IsUnusedAndEnd())
             {
                 location_ = Location::END;

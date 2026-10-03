@@ -133,7 +133,8 @@ namespace filesystems::fat32
 
         //  Create a read buffer
 
-        uint8_t block_buffer[block_io_adapter.BytesPerCluster()];
+        minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter.BytesPerCluster());
+        uint8_t *block_buffer = cluster_buffer.data();
         uint32_t bytes_in_block = block_io_adapter.BytesPerCluster();
 
         //  If the current cluster is zero, then we have an empty file and there is nothing to read
@@ -246,7 +247,8 @@ namespace filesystems::fat32
 
         //  Allocate a buffer for the cluster on the stack.
 
-        uint8_t block_buffer[block_io_adapter.BytesPerCluster()];
+        minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter.BytesPerCluster());
+        uint8_t *block_buffer = cluster_buffer.data();
 
         //  Start tracking the offset into the write buffer
 

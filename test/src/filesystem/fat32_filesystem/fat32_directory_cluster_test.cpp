@@ -238,4 +238,44 @@ namespace
 
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, directory.MoveToDirectory(FAT32ClusterIndex(3)));
     }
+
+        TEST(FAT32DirectoryClusterTest, GetClusterEntryRejectsOutOfRangeIndex)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        FAT32BlockIOAdapter &adapter = test_fat32->BlockIOAdapter();
+        const FAT32ClusterIndex root_cluster = adapter.RootDirectoryCluster();
+        const uint32_t entries_per_cluster = adapter.BytesPerCluster() / sizeof(FAT32DirectoryClusterEntry);
+
+        FAT32DirectoryCluster directory(test_fat32->Id(), adapter, root_cluster);
+
+        //  The last slot is legal; one past it is not.
+
+        CHECK(directory.GetClusterEntry(FAT32DirectoryEntryAddress(root_cluster, entries_per_cluster - 1)).Successful());
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_CURRENT_DIRECTORY_ENTRY_IS_INVALID,
+                               directory.GetClusterEntry(FAT32DirectoryEntryAddress(root_cluster, entries_per_cluster)));
+    }
+
+    TEST(FAT32DirectoryClusterTest, EntryWritersRejectOutOfRangeIndex)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        FAT32BlockIOAdapter &adapter = test_fat32->BlockIOAdapter();
+        const FAT32ClusterIndex root_cluster = adapter.RootDirectoryCluster();
+        const uint32_t entries_per_cluster = adapter.BytesPerCluster() / sizeof(FAT32DirectoryClusterEntry);
+        const FAT32DirectoryEntryAddress past_end(root_cluster, entries_per_cluster);
+
+        FAT32DirectoryCluster directory(test_fat32->Id(), adapter, root_cluster);
+
+        CHECK_EQUAL(FilesystemResultCodes::FAT32_CURRENT_DIRECTORY_ENTRY_IS_INVALID, directory.RemoveEntry(past_end));
+        CHECK_EQUAL(FilesystemResultCodes::FAT32_CURRENT_DIRECTORY_ENTRY_IS_INVALID,
+                    FAT32Directory::SetDirectoryEntryFirstCluster(adapter, past_end, FAT32ClusterIndex(40)));
+        CHECK_EQUAL(FilesystemResultCodes::FAT32_CURRENT_DIRECTORY_ENTRY_IS_INVALID,
+                    FAT32Directory::UpdateDirectoryEntrySize(adapter, past_end, 0));
+    }
 }

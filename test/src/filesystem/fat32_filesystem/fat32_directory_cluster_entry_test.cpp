@@ -89,4 +89,16 @@ namespace
 
         CHECK(label.empty());
     }
+
+    TEST(FAT32DirectoryClusterEntry, LFNEntryStoresHighBitCharactersWithoutSignExtension)
+    {
+        FAT32LongFilenameClusterEntry entry(minstd::fixed_string<>("\xE9"), 1, true, 0);
+
+        //  name1_ starts at byte 1; characters are UCS-2 little-endian.  0xE9 must be U+00E9.
+
+        const uint8_t *bytes = reinterpret_cast<const uint8_t *>(&entry);
+
+        CHECK_EQUAL(0xE9, bytes[1]);
+        CHECK_EQUAL(0x00, bytes[2]);
+    }
 }

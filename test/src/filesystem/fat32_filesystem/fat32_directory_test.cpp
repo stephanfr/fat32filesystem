@@ -296,4 +296,99 @@ namespace
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, root->DeleteFile(minstd::fixed_string<>("rootfile.txt")));
     }
+
+    TEST(FAT32DirectoryTest, LongNameWithWrongChecksumIsIgnored)
+    {
+        //  The LFN run of "...Name.With.Leading.Periods.lNg" is root cluster 2 idx 14-15 and
+        //      cluster 12 idx 0.  Byte 13 of an LFN entry is the short-name checksum.  Corrupt it
+        //      in all three: the run is now orphaned and must not name anything.
+
+        const FAT32ClusterIndex root_cluster = test_fs.Adapter().RootDirectoryCluster();
+
+        auto second_cluster = test_fs.Adapter().NextClusterInChain(root_cluster);
+
+        CHECK(second_cluster.Successful());
+
+        minstd::heap_buffer<uint8_t> buffer(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(root_cluster, buffer.data()));
+        buffer.data()[(14 * 32) + 13] ^= 0xFF;
+        buffer.data()[(15 * 32) + 13] ^= 0xFF;
+        CHECK(test_fs.Adapter().WriteCluster(root_cluster, buffer.data()) == BlockIOResultCodes::SUCCESS);
+
+        CHECK(test_fs.ReadRawCluster(*second_cluster, buffer.data()));
+        buffer.data()[(0 * 32) + 13] ^= 0xFF;
+        CHECK(test_fs.Adapter().WriteCluster(*second_cluster, buffer.data()) == BlockIOResultCodes::SUCCESS);
+
+        auto root = test_fs.RootDirectory();
+
+        CHECK_FALSE(root->GetDirectory(minstd::fixed_string<MAX_FILENAME_LENGTH>("...Name.With.Leading.Periods.lNg")).Successful());
+    }
+
+    TEST(FAT32DirectoryTest, RenameOpenFileIsRejected)
+    {
+        auto root = test_fs.RootDirectory();
+
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        minstd::fixed_string<MAX_FILENAME_LENGTH> name("Lorem ipsum dolor sit amet.text");
+
+        auto file = (*subdir)->OpenFile(name, FileModes::READ);
+
+        CHECK(file.Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY,
+                    (*subdir)->RenameFile(name, minstd::fixed_string<>("RENAMED.TXT")));
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+    }
+
+    TEST(FAT32DirectoryTest, FailedRenameDoesNotLeaveTwoEntries)
+    {
+        auto root = test_fs.RootDirectory();
+
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        minstd::fixed_string<MAX_FILENAME_LENGTH> name("Lorem ipsum dolor sit amet.text");
+
+        //  Rename makes two writes: creating "RENAMED.TXT" (one cluster), then marking the old
+        //      entry deleted (cluster 3).  Let the first through and fail the second.
+
+        test_fs.Device().SimulateWriteError(1);
+
+        CHECK((*subdir)->RenameFile(name, minstd::fixed_string<>("RENAMED.TXT")) != FilesystemResultCodes::SUCCESS);
+
+        //  Exactly one entry may reference the file's chain: the original.
+
+        CHECK_FALSE((*subdir)->OpenFile(minstd::fixed_string<>("RENAMED.TXT"), FileModes::READ).Successful());
+
+        auto original = (*subdir)->OpenFile(name, FileModes::READ);
+
+        CHECK(original.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*original)->Close());
+    }
+
+    TEST(FAT32DirectoryTest, DeletedSingleEntrySlotIsReused)
+    {
+        auto root = test_fs.RootDirectory();
+
+        //  SUBDIR3 is an empty 8.3 directory at root cluster 2 idx 3, between two live entries.
+        //      Removing it leaves a one-slot hole - exactly what an 8.3 name needs.
+
+        auto subdir3 = root->GetDirectory(minstd::fixed_string<>("SUBDIR3"));
+
+        CHECK(subdir3.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*subdir3)->RemoveDirectory());
+
+        CHECK(root->CreateDirectory(minstd::fixed_string<>("NEWDIR")).Successful());
+
+        minstd::heap_buffer<uint8_t> buffer(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(test_fs.Adapter().RootDirectoryCluster(), buffer.data()));
+        CHECK(memcmp(buffer.data() + (3 * 32), "NEWDIR     ", 11) == 0);
+    }
 }

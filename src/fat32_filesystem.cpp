@@ -153,6 +153,11 @@ namespace filesystems::fat32
         //  Start at the back of the path and work our way to the front looking for cached directories,
         //      this will give us the 'longest absolute path' already cached
 
+        if (path.IsRoot())
+        {
+            return Result::Failure(FilesystemResultCodes::DIRECTORY_NOT_FOUND);
+        }
+
         FAT32ClusterIndex starting_index = {0};
         auto itr = path.end();
         minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path;

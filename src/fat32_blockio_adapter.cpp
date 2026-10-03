@@ -140,6 +140,13 @@ namespace filesystems::fat32
             return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
         }
 
+        //  Every FAT boot sector ends 0x55 0xAA at offsets 510-511, and FAT32 defines only version 0.0.
+
+        if ((first_lba_buffer[510] != 0x55) || (first_lba_buffer[511] != 0xAA) || (bpb.version_ != 0))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
         if (bpb.logical_sectors_per_cluster_ == 0 ||
             bpb.logical_sectors_per_cluster_ > MAX_LOGICAL_SECTORS_PER_CLUSTER ||
             !IsPowerOfTwo(bpb.logical_sectors_per_cluster_))

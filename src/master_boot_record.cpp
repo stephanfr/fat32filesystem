@@ -73,6 +73,8 @@ namespace filesystems
         //  Iterate over the available partitions
         //
 
+        bool boot_partition_assigned = false;
+
         for (uint32_t i = 0; i < MBR_NUMBER_OF_PARTITION_ENTRIES; i++)
         {
             //  Insure the partition is active
@@ -118,12 +120,17 @@ namespace filesystems
 
             fat32::FAT32PartitionOpaqueData opaque_data(mbr.partitions_[i].first_logical_block_addressing_sector_, mbr.partitions_[i].num_sectors_);
 
-            //  Mark the partition as the boot partition if the index is zero (i.e. it is the first partition)
+            //  The first FAT32 partition is the boot partition, whatever slot it is in.  Slot 0 may
+            //      hold another filesystem or be empty.
+
+            const bool is_boot = !boot_partition_assigned;
+
+            boot_partition_assigned = true;
 
             partitions.emplace_back(entry->Name().c_str(),
                                     entry->Name().c_str(),
                                     FilesystemTypes::FAT32,
-                                    (i == 0),
+                                    is_boot,
                                     &opaque_data,
                                     sizeof(fat32::FAT32PartitionOpaqueData));
         }

@@ -492,4 +492,13 @@ namespace
             CHECK(!short_filename2.IsDerivativeOfBasisFilename(basis_filename));
         }
     }
+
+    TEST(FAT32ShortFilename, HighBitCharactersAreNotCaseFolded)
+    {
+        FAT32ShortFilename short_filename("\xE9name", "txt");
+
+        STRCMP_EQUAL("\xE9NAME", short_filename.Name().c_str());
+        STRCMP_EQUAL("TXT", short_filename.Extension().c_str());
+        CHECK_FALSE(short_filename.LossyConversion());
+    }
 }

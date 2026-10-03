@@ -69,7 +69,7 @@ namespace filesystems
         FAT32_UNABLE_TO_FIND_EMPTY_BLOCK_OF_DIRECTORY_ENTRIES,
         FAT32_ALREADY_AT_FIRST_CLUSTER,
         FAT32_CLUSTER_NOT_PRESENT_IN_CHAIN,
-        
+
         //
         //  End of error codes flag
         //

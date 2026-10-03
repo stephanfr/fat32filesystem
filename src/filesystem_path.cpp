@@ -20,12 +20,17 @@ namespace filesystems
             return Result::Failure(FilesystemResultCodes::EMPTY_PATH);
         }
 
-        if ((path_string[0] != DIRECTORY_DELIMITER) && !isalnum(path_string[0])) //  Insure path begins with an alpha or numeric if it is not the root
+        const unsigned char first_char = static_cast<unsigned char>(path_string[0]);
+
+        //  A relative path may begin with any printable, non-blank character.  Filenames such as
+        //      "_config" and "$data" are legal.
+
+        if ((path_string[0] != DIRECTORY_DELIMITER) && (!isprint(first_char) || isspace(first_char) || (first_char == '.')))
         {
             return Result::Failure(FilesystemResultCodes::ILLEGAL_PATH);
         }
 
-        if (isspace(path_string[path_string.length() - 1])) //  Insure path does not end with whitespace
+        if (isspace(static_cast<unsigned char>(path_string[path_string.length() - 1])))     //  Insure path does not end with whitespace
         {
             return Result::Failure(FilesystemResultCodes::ILLEGAL_PATH);
         }
@@ -65,7 +70,7 @@ namespace filesystems
 
         for (uint32_t i = 0; i < path->length_; i++)
         {
-            if (!isprint(path->parsed_path_[i]))
+            if (!isprint(static_cast<unsigned char>(path->parsed_path_[i])))
             {
                 return Result::Failure(FilesystemResultCodes::ILLEGAL_PATH);
             }

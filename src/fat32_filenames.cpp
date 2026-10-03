@@ -19,11 +19,16 @@ namespace filesystems::fat32
 
     minstd::pair<char, bool> FAT32ShortFilename::GetPermissibleCharacter(const char current_char)
     {
-        if (isalpha(current_char))
+        const uint8_t byte = static_cast<uint8_t>(current_char);
+
+        //  Fold ASCII letters only.  Short names are in the OEM code page, where high-bit bytes
+        //      have no reliable case mapping; they pass through unchanged below.
+
+        if ((byte >= 'a') && (byte <= 'z'))
         {
-            return minstd::pair((char)toupper(current_char), false);
+            return minstd::pair(static_cast<char>(byte - ('a' - 'A')), false);
         }
-        else if (isspace(current_char) || (current_char == '.'))
+        else if (((byte < 0x80) && isspace(byte)) || (byte == '.'))
         {
             //  Document says strip all leading and embedded spaces - so I assume embedded includes trailing.
             //      Similarly, doc says strip leading periods but also do not copy any periods in the long filename
@@ -31,8 +36,8 @@ namespace filesystems::fat32
             return minstd::pair((char)0, false);
         }
         else if ((FORBIDDEN_8_3_FILENAME_CHARACTERS.find(current_char) == minstd::string::npos) &&
-                 (current_char > 31) &&
-                 (current_char != 127))
+                 (byte > 31) &&
+                 (byte != 127))
         {
             //  The current character is a permissible 8.3 filename character, so add it to the short filename
 
@@ -55,7 +60,7 @@ namespace filesystems::fat32
 
         for (front_of_number = name_.length() - 1; front_of_number > 0; front_of_number--)
         {
-            if (!isdigit(name_[front_of_number]))
+            if (!isdigit(static_cast<unsigned char>(name_[front_of_number])))
             {
                 break;
             }

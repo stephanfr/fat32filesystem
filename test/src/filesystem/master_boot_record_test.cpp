@@ -109,4 +109,31 @@ namespace
         CHECK(GetPartitions(test_device, partitions) == FilesystemResultCodes::SUCCESS);
         CHECK_EQUAL(0, partitions.size());
     }
+
+    TEST(MasterBootRecord, FirstFAT32PartitionIsBootEvenWhenNotInSlotZero)
+    {
+        ut_utility::InMemoryFileBlockIODevice test_device("UNIT_TEST_SLOT_ONE");
+
+        CHECK(test_device.Open("./test/data/empty_fat32.img"));
+
+        uint8_t mbr_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+        CHECK(test_device.ReadFromBlock(mbr_buffer, 0, 1).Successful());
+
+        //  Move the FAT32 partition to slot 1 and put a Linux partition type in slot 0.
+
+        memcpy(mbr_buffer + 0x1CE, mbr_buffer + 0x1BE, 16);
+        mbr_buffer[0x1BE + 4] = 0x83;
+
+        CHECK(test_device.WriteBlock(mbr_buffer, 0, 1).Successful());
+
+        alignas(MassStoragePartition) uint8_t partition_buffer[sizeof(MassStoragePartition) * MAX_PARTITIONS_ON_MASS_STORAGE_DEVICE + alignof(MassStoragePartition) * MAX_PARTITIONS_ON_MASS_STORAGE_DEVICE];
+        minstd::pmr::monotonic_buffer_resource partition_resource(partition_buffer, sizeof(partition_buffer), nullptr);
+        minstd::pmr::polymorphic_allocator<MassStoragePartition> partition_allocator(&partition_resource);
+
+        MassStoragePartitions partitions(partition_allocator);
+
+        CHECK(GetPartitions(test_device, partitions) == FilesystemResultCodes::SUCCESS);
+        CHECK_EQUAL(1, partitions.size());
+        CHECK(partitions[0].IsBoot());
+    }
 }
