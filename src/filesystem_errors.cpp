@@ -7,7 +7,7 @@
 namespace filesystems
 {
 
-    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 41);
+    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 42);
 
     const char *ErrorMessage(FilesystemResultCodes code)
     {
@@ -69,6 +69,9 @@ namespace filesystems
 
         case FilesystemResultCodes::FILE_NOT_OPENED_FOR_READ:
             return "File not opened for Read";
+
+        case FilesystemResultCodes::FILE_NOT_OPENED_FOR_WRITE:
+            return "File not opened for Write";
 
         case FilesystemResultCodes::FILE_NOT_OPENED_FOR_APPEND:
             return "File not opened for Append";

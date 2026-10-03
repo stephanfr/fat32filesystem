@@ -423,17 +423,30 @@ namespace filesystems::fat32
             }
         }
 
+        //  The entry lives in the parent directory, and RemoveEntry() walks backwards through
+        //      the parent's chain to clear the long filename entries.  FAT32Directory does not
+        //      hold its parent, but our own '..' entry (always index 1) records the parent's
+        //      first cluster - with 0 meaning root, which FirstCluster() maps for us.
+
+        auto dot_dot_entry = directory_cluster.GetClusterEntry(FAT32DirectoryEntryAddress(first_cluster_, 1));
+
+        ReturnOnFailure(dot_dot_entry);
+
+        const FAT32ClusterIndex parent_first_cluster = dot_dot_entry->FirstCluster(block_io_adapter.RootDirectoryCluster());
+
+        FAT32DirectoryCluster parent_directory_cluster(filesystem.Id(), block_io_adapter, parent_first_cluster);
+
         //  Remove any entry from the cache first
 
         filesystem.DirectoryCache().RemoveEntry(first_cluster_);
 
         //  Remove the directory cluster entry
 
-        directory_cluster.RemoveEntry(entry_address_);
+        ReturnOnCallFailure(parent_directory_cluster.RemoveEntry(entry_address_));
 
         //  Release the clusters for the directory
 
-        block_io_adapter.ReleaseChain(cluster_entry->FirstCluster(block_io_adapter.RootDirectoryCluster()));
+        ReturnOnCallFailure(block_io_adapter.ReleaseChain(cluster_entry->FirstCluster(block_io_adapter.RootDirectoryCluster())));
 
         //  Finished with Success
 
@@ -470,8 +483,7 @@ namespace filesystems::fat32
             //  File exists, so open it.  Get the full path first.
 
             minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> path(path_, __dynamic_string_allocator);
-            path += "/";
-            path += filename;
+            AppendToPath(path, filename);
 
             minstd::unique_ptr<File> file(static_cast<File *>(make_dynamic_unique<FAT32File>(FilesystemUUID(), *file_entry, path, mode, 0, 0).release()), __os_dynamic_heap_resource);
 
@@ -544,8 +556,7 @@ namespace filesystems::fat32
         ReturnOnFailure(new_file_directory_entry);
 
         minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> path(path_, __dynamic_string_allocator);
-        path += "/";
-        path += filename;
+        AppendToPath(path, filename);
 
         minstd::unique_ptr<FAT32File> file(make_dynamic_unique<FAT32File>(FilesystemUUID(), *new_file_directory_entry, path, mode, 0, 0).release(), __os_dynamic_heap_resource);
 
@@ -639,9 +650,7 @@ namespace filesystems::fat32
         //  Insure the file is not open
 
         minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path(path_);
-
-        absolute_path += "/";
-        absolute_path += filename;
+        AppendToPath(absolute_path, filename);
 
         if (GetFileMap().IsFileOpen(absolute_path))
         {
@@ -656,7 +665,7 @@ namespace filesystems::fat32
 
         FAT32DirectoryCluster directory_cluster = FAT32DirectoryCluster(filesystem.Id(),
                                                                         block_io_adapter,
-                                                                        FAT32ClusterIndex(0));
+                                                                        FirstCluster());
 
         //  Insure the file still exists, if not return a file not found error
 
@@ -671,11 +680,16 @@ namespace filesystems::fat32
 
         //  Remove the file cluster entry
 
-        directory_cluster.RemoveEntry(GetOpaqueData(*file_entry).directory_entry_address_);
+        ReturnOnCallFailure(directory_cluster.RemoveEntry(GetOpaqueData(*file_entry).directory_entry_address_));
 
-        //  Release the clusters for the file
+        //  Release the clusters for the file.  A file that was never written has no chain.
 
-        block_io_adapter.ReleaseChain(cluster_entry->FirstCluster(block_io_adapter.RootDirectoryCluster()));
+        const FAT32ClusterIndex file_first_cluster = cluster_entry->FirstCluster(block_io_adapter.RootDirectoryCluster());
+
+        if ((uint32_t)file_first_cluster != 0)
+        {
+            ReturnOnCallFailure(block_io_adapter.ReleaseChain(file_first_cluster));
+        }
 
         //  Finished with Success
 
@@ -727,7 +741,7 @@ namespace filesystems::fat32
 
         filesystem.DirectoryCache().RemoveEntry(GetOpaqueData(*directory_entry).FirstCluster());
 
-        directory_cluster.RemoveEntry(GetOpaqueData(*directory_entry).directory_entry_address_);
+        ReturnOnCallFailure(directory_cluster.RemoveEntry(GetOpaqueData(*directory_entry).directory_entry_address_));
 
         //  Finished with Success
 

@@ -243,6 +243,7 @@ namespace filesystems::fat32
                                                    bpb.logical_sectors_per_cluster_,
                                                    bpb.bytes_per_logical_sector_,
                                                    bpb.logical_sectors_per_fat32_,
+                                                   bpb.number_of_fats_,
                                                    first_lba_sector,
                                                    fat_lba,
                                                    data_lba,
@@ -285,7 +286,7 @@ namespace filesystems::fat32
 
         //  Finished with success
 
-        return Result::Success(FAT32ClusterIndex(current_fat[offset]));
+        return Result::Success(FAT32ClusterIndex(current_fat[offset] & 0x0FFFFFFF));
     }
 
     ValueResult<FilesystemResultCodes, FAT32ClusterIndex> FAT32BlockIOAdapter::PreviousClusterInChain(FAT32ClusterIndex first_cluster,
@@ -367,12 +368,32 @@ namespace filesystems::fat32
             return FilesystemResultCodes::FAT32_UNABLE_TO_READ_FAT_TABLE_SECTOR;
         }
 
-        current_fat[start_off] = static_cast<uint32_t>(new_value);
+        current_fat[start_off] = (current_fat[start_off] & 0xF0000000) | (static_cast<uint32_t>(new_value) & 0x0FFFFFFF);
 
         if (io_device_->WriteBlock((uint8_t *)current_fat, sector.Value(), 1).Failed())
         {
             LogDebug1("Unable to write FAT32 sector: %u\n", sector.Value());
             return FilesystemResultCodes::FAT32_UNABLE_TO_WRITE_FAT_TABLE_SECTOR;
+        }
+
+        //  Mirror the update into every remaining FAT.
+
+        for (uint32_t fat_index = 1; fat_index < number_of_fats_; fat_index++)
+        {
+            uint32_t fat_offset = 0;
+            uint32_t mirror_sector = 0;
+
+            if (!CheckedMulU32(fat_index, sectors_per_fat_, fat_offset) ||
+                !CheckedAddU32(sector.Value(), fat_offset, mirror_sector))
+            {
+                return FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE;
+            }
+
+            if (io_device_->WriteBlock((uint8_t *)current_fat, mirror_sector, 1).Failed())
+            {
+                LogDebug1("Unable to write mirrored FAT32 sector: %u\n", mirror_sector);
+                return FilesystemResultCodes::FAT32_UNABLE_TO_WRITE_FAT_TABLE_SECTOR;
+            }
         }
 
         //  Finished with success
@@ -409,11 +430,27 @@ namespace filesystems::fat32
 
         ReturnOnCallFailure(ReadFATBlock(FAT32ClusterIndex(current_cluster), current_fat));
 
+        //  The scan starts at a high-water mark, so clusters freed below it would never be
+        //      reused without a wrap.  Without this the volume reports itself permanently
+        //      full after enough create/delete cycles, however empty it actually is.
+
+        bool wrapped = false;
+
         while (true)
         {
-            if (current_cluster >= (uint32_t)MaximumClusterNumber())
+            if (current_cluster > (uint32_t)MaximumClusterNumber())
             {
-                return Result::Failure(FilesystemResultCodes::FAT32_DEVICE_FULL);
+                if (wrapped)
+                {
+                    return Result::Failure(FilesystemResultCodes::FAT32_DEVICE_FULL);
+                }
+
+                wrapped = true;
+                current_cluster = static_cast<uint32_t>(root_directory_cluster_);
+
+                ReturnOnCallFailure(ReadFATBlock(FAT32ClusterIndex(current_cluster), current_fat));
+
+                continue;
             }
 
             if (current_fat[current_cluster % fat32_entries_per_block_] == FAT32EntryFree)
@@ -434,8 +471,8 @@ namespace filesystems::fat32
 
         //  We will fake it here as this new cluster is likely to be used and will update the last used cluster
 
-        const_cast<FAT32BlockIOAdapter *>(this)->last_empty_cluster_found_ = minstd::max(last_empty_cluster_found_, FAT32ClusterIndex(current_cluster));
-
+        last_empty_cluster_found_ = minstd::max(last_empty_cluster_found_, FAT32ClusterIndex(current_cluster));
+        
         //  Return the cluster
 
         return Result::Success(FAT32ClusterIndex(current_cluster));

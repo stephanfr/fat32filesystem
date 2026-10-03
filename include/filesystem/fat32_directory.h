@@ -215,6 +215,20 @@ namespace filesystems::fat32
         const FAT32Compact8Dot3Filename compact_name_;
 
         /**
+         * @brief Appends a path element, inserting a separator only when one is needed.  The
+         *        root directory's path is already "/", so appending another yields "//name".
+         */
+        void AppendToPath(minstd::string &path, const minstd::string &element) const
+        {
+            if (path != "/")
+            {
+                path += "/";
+            }
+
+            path += element;
+        }
+
+        /**
          * Retrieves a directory entry with the specified name and type from the FAT32 filesystem.
          *
          * @param block_io_adapter The block I/O adapter for accessing the filesystem.

@@ -152,4 +152,148 @@ namespace
 
         CHECK(root->GetDirectory(minstd::fixed_string<>("NEWDIR")).Successful());
     }
+
+    TEST(FAT32DirectoryTest, DeleteFileClearsLongFilenameEntriesAcrossAClusterBoundary)
+    {
+        auto root = test_fs.RootDirectory();
+
+        const FAT32ClusterIndex root_cluster = test_fs.Adapter().RootDirectoryCluster();
+
+        auto second_cluster = test_fs.Adapter().NextClusterInChain(root_cluster);      //  cluster 12
+
+        CHECK(second_cluster.Successful());
+
+        //  Cluster 12 has idx 0-1 in use.  A 136-character name needs 11 LFN entries plus the
+        //      short entry.  FindEmptyBlockOfEntries asks for 11 + 2 = 13 free slots; idx 2-15
+        //      has 14, so the name fills idx 2-13 and leaves exactly idx 14-15 free.
+
+        char filler[137];
+
+        memset(filler, 'f', 132);
+        memcpy(filler + 132, ".dat", 5);
+
+        auto filler_file = root->OpenFile(minstd::fixed_string<MAX_FILENAME_LENGTH>(filler),
+                                          static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK(filler_file.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*filler_file)->Close());
+
+        const uint32_t lfn_after_filler = CountLiveLFNEntries(*second_cluster);
+
+        //  A 25-character name needs 2 LFN entries plus the short entry, and the search asks
+        //      for 2 + 2 = 4 free slots.  Only 2 remain, so the directory grows, and the run
+        //      idx 14-15 + new idx 0-1 qualifies.  The LFN entries go in cluster 12 idx 14-15
+        //      and the short entry goes in idx 0 of the new third cluster.
+
+        minstd::fixed_string<MAX_FILENAME_LENGTH> straddling_name("straddling_entry_name.dat");
+
+        auto straddling_file = root->OpenFile(straddling_name, static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK(straddling_file.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*straddling_file)->Close());
+
+        //  Premise: the entry really does straddle.  If either check fails, the layout
+        //      assumption is wrong - adjust the filler length, not the fix.
+
+        auto third_cluster = test_fs.Adapter().NextClusterInChain(*second_cluster);
+
+        CHECK(third_cluster.Successful());
+        CHECK((uint32_t)*third_cluster < (uint32_t)FAT32EntryEOFThreshold);
+        CHECK_EQUAL(lfn_after_filler + 2, CountLiveLFNEntries(*second_cluster));
+
+        //  Deleting must clear the two LFN entries left behind in cluster 12.  Pre-fix the
+        //      backwards walk started from cluster 0, failed, and the failure was discarded.
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, root->DeleteFile(straddling_name));
+
+        CHECK_EQUAL(lfn_after_filler, CountLiveLFNEntries(*second_cluster));
+    }
+
+    TEST(FAT32DirectoryTest, RemoveDirectoryClearsLongFilenameEntriesAcrossAClusterBoundary)
+    {
+        auto root = test_fs.RootDirectory();
+
+        const FAT32ClusterIndex root_cluster = test_fs.Adapter().RootDirectoryCluster();
+
+        //  "...Name.With.Leading.Periods.lNg" is empty.  Its three LFN entries sit at root
+        //      cluster 2 idx 14-15 and cluster 12 idx 0; its short entry is cluster 12 idx 1.
+        //      Removing it must clear the two LFN entries in cluster 2.
+
+        const uint32_t lfn_in_first_cluster_before = CountLiveLFNEntries(root_cluster);
+
+        auto directory = root->GetDirectory(minstd::fixed_string<MAX_FILENAME_LENGTH>("...Name.With.Leading.Periods.lNg"));
+
+        CHECK(directory.Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*directory)->RemoveDirectory());
+
+        CHECK_EQUAL(lfn_in_first_cluster_before - 2, CountLiveLFNEntries(root_cluster));
+    }
+
+        TEST(FAT32DirectoryTest, DeleteFilePropagatesRemoveEntryFailure)
+    {
+        auto root = test_fs.RootDirectory();
+
+        auto file = root->OpenFile(minstd::fixed_string<>("failme.dat"),
+                                   static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK(file.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+
+        //  The first device write DeleteFile makes is RemoveEntry marking the entry deleted.
+
+        test_fs.Device().SimulateWriteError(0);
+
+        //  Pre-fix RemoveEntry's failure was discarded and this returned SUCCESS.
+
+        CHECK(root->DeleteFile(minstd::fixed_string<>("failme.dat")) != FilesystemResultCodes::SUCCESS);
+    }
+
+    TEST(FAT32DirectoryTest, DeleteFileOfNeverWrittenFileSucceeds)
+    {
+        auto root = test_fs.RootDirectory();
+
+        //  Created but never written: the entry's first cluster is 0 and there is no chain to
+        //      release.  Must stay SUCCESS once ReleaseChain's result is checked.
+
+        auto file = root->OpenFile(minstd::fixed_string<>("empty.dat"),
+                                   static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK(file.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, root->DeleteFile(minstd::fixed_string<>("empty.dat")));
+        CHECK_EQUAL(FilesystemResultCodes::FILE_NOT_FOUND, root->DeleteFile(minstd::fixed_string<>("empty.dat")));
+    }
+
+    TEST(FAT32DirectoryTest, RootLevelFilePathsHaveSingleSeparator)
+    {
+        auto root = test_fs.RootDirectory();
+
+        auto file = root->OpenFile(minstd::fixed_string<>("rootfile.txt"),
+                                   static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK(file.Successful());
+
+        auto path = (*file)->AbsolutePath();
+
+        CHECK(path.Successful());
+
+        //  Pre-fix this is "//rootfile.txt", so the file map key never matches a
+        //      caller-supplied "/rootfile.txt".
+
+        STRCMP_EQUAL("/rootfile.txt", path->c_str());
+
+        minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path("/rootfile.txt");
+
+        CHECK(GetFileMap().IsFileOpen(absolute_path));
+
+        //  And the open file must be protected from deletion.
+
+        CHECK_EQUAL(FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY,
+                    root->DeleteFile(minstd::fixed_string<>("rootfile.txt")));
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, root->DeleteFile(minstd::fixed_string<>("rootfile.txt")));
+    }
 }

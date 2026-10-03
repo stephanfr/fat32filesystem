@@ -235,7 +235,7 @@ namespace filesystems::fat32
             }
             else
             {
-                current_directory.MoveToDirectory(cluster_entry->FirstCluster(block_io_adapter_.RootDirectoryCluster()));
+                ReturnOnCallFailure(current_directory.MoveToDirectory(cluster_entry->FirstCluster(block_io_adapter_.RootDirectoryCluster())));
             }
         }
 

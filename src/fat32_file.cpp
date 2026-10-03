@@ -199,6 +199,13 @@ namespace filesystems::fat32
     {
         using Result = FilesystemResultCodes;
 
+        //  Insure the file is opened for write
+
+        if (!HasFileMode(mode_, FileModes::WRITE) && !HasFileMode(mode_, FileModes::APPEND))
+        {
+            return FilesystemResultCodes::FILE_NOT_OPENED_FOR_WRITE;
+        }
+        
         //  Get the filesystem entity
 
         auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(filesystem_uuid_);
@@ -247,22 +254,21 @@ namespace filesystems::fat32
 
         while (offset_into_buffer < buffer.size())
         {
-            //  If we have data already written into this cluster, then read it so we can append.
+            uint32_t bytes_left_in_cluster = block_io_adapter.BytesPerCluster() - byte_offset_into_cluster_;
+            uint32_t bytes_to_copy = minstd::min(bytes_left_in_cluster, (uint32_t)buffer.size() - offset_into_buffer);
 
-            if (byte_offset_into_cluster_ > 0)
+            //  The whole cluster is written back below, so unless every byte of it is being replaced it must be read first.
+
+            const bool overwrites_whole_cluster = (byte_offset_into_cluster_ == 0) &&
+                                                  (bytes_to_copy == block_io_adapter.BytesPerCluster());
+
+            if (!overwrites_whole_cluster)
             {
-                BlockIOResultCodes read_block_result = block_io_adapter.ReadCluster(current_cluster_, block_buffer);
-
-                if (read_block_result != BlockIOResultCodes::SUCCESS)
+                if (block_io_adapter.ReadCluster(current_cluster_, block_buffer) != BlockIOResultCodes::SUCCESS)
                 {
                     return FilesystemResultCodes::FAT32_DEVICE_READ_ERROR;
                 }
             }
-
-            //  Append from the buffer to the cluster, then write the cluster.
-
-            uint32_t bytes_left_in_cluster = block_io_adapter.BytesPerCluster() - byte_offset_into_cluster_;
-            uint32_t bytes_to_copy = minstd::min(bytes_left_in_cluster, (uint32_t)buffer.size() - offset_into_buffer);
 
             memcpy(block_buffer + byte_offset_into_cluster_, (char *)buffer.data() + offset_into_buffer, bytes_to_copy);
 
@@ -361,10 +367,14 @@ namespace filesystems::fat32
 
     FilesystemResultCodes FAT32File::Close()
     {
-        LogEntryAndExit("Entering with file name: %s\n", Filename()->c_str());
+        //  RemoveFile() erases the unique_ptr that owns this object, so *this is destroyed the
+        //      moment it returns.  Log first, and touch no member - and no RAII guard that
+        //      might - afterwards.
 
-        //  Remove the file from the file map
+        LogDebug1("Closing file: %s\n", path_.c_str());
 
-        return GetFileMap().RemoveFile(*this);
+        const FilesystemResultCodes result = GetFileMap().RemoveFile(*this);
+
+        return result;
     }
 } // namespace filesystems::fat32

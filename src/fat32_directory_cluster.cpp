@@ -202,7 +202,7 @@ namespace filesystems::fat32
 
         //  Remove any trailing spaces
 
-        while (buffer.back() == ' ')
+        while (!buffer.empty() && (buffer.back() == ' '))
         {
             buffer.pop_back();
         }
@@ -445,6 +445,14 @@ namespace filesystems::fat32
                 }
 
                 buffer_dirty = false;
+
+                //  Already in the directory's first cluster: nothing in front of us, so the
+                //      scan back is complete.  The entry was flushed above - this is success.
+
+                if (current_entry_address.cluster_ == first_cluster_)
+                {
+                    break;
+                }
 
                 auto previous_cluster = block_io_adapter_.PreviousClusterInChain(first_cluster_, current_entry_address.cluster_);
 

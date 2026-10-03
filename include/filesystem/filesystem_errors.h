@@ -41,6 +41,7 @@ namespace filesystems
         FILE_NOT_FOUND,
         FILENAME_ALREADY_IN_USE,
         FILE_NOT_OPENED_FOR_READ,
+        FILE_NOT_OPENED_FOR_WRITE,
         FILE_NOT_OPENED_FOR_APPEND,
         ROOT_DIRECTORY_CANNOT_BE_REMOVED,
         DIRECTORY_NOT_EMPTY,
@@ -68,7 +69,7 @@ namespace filesystems
         FAT32_UNABLE_TO_FIND_EMPTY_BLOCK_OF_DIRECTORY_ENTRIES,
         FAT32_ALREADY_AT_FIRST_CLUSTER,
         FAT32_CLUSTER_NOT_PRESENT_IN_CHAIN,
-
+        
         //
         //  End of error codes flag
         //

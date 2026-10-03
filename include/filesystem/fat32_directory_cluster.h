@@ -881,10 +881,24 @@ namespace filesystems::fat32
          * @brief Moves the current directory to the specified FAT32 directory cluster.
          *
          * @param new_directory_first_cluster The first cluster of the new directory.
+         * @return FAT32_CLUSTER_OUT_OF_RANGE if the cluster is not a data cluster on this volume,
+         *         in which case the current directory is unchanged.
          */
-        void MoveToDirectory(FAT32ClusterIndex new_directory_first_cluster)
+        FilesystemResultCodes MoveToDirectory(FAT32ClusterIndex new_directory_first_cluster)
         {
+            //  A directory's first cluster must be a data cluster.  0 and 1 are reserved, and
+            //      anything past the end of the volume (including the end-of-chain markers that
+            //      IsClusterOutOfRange() deliberately accepts) means the entry is corrupt.
+
+            if ((new_directory_first_cluster < FAT32ClusterIndex(2)) ||
+                (new_directory_first_cluster > block_io_adapter_.MaximumClusterNumber()))
+            {
+                return FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE;
+            }
+
             first_cluster_ = new_directory_first_cluster;
+
+            return FilesystemResultCodes::SUCCESS;
         }
 
         /**

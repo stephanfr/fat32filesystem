@@ -67,4 +67,26 @@ namespace
 
         STRCMP_EQUAL("VOLLABEL", volume_label.c_str());
     }
+
+    TEST(FAT32DirectoryClusterEntry, VolumeLabelOfAllSpacesIsEmpty)
+    {
+        FAT32DirectoryClusterEntry entry("        ",
+                                         "   ",
+                                         FAT32DirectoryEntryAttributeFlags::FAT32DirectoryEntryAttributeVolumeId,
+                                         0,
+                                         FAT32TimeHundredths(0),
+                                         FAT32Time(0, 0, 0),
+                                         FAT32Date(1980, 1, 1),
+                                         FAT32Date(1980, 1, 1),
+                                         FAT32ClusterIndex(0),
+                                         FAT32Time(0, 0, 0),
+                                         FAT32Date(1980, 1, 1),
+                                         0);
+
+        minstd::fixed_string<MAX_FILENAME_LENGTH> label;
+
+        entry.VolumeLabel(label);
+
+        CHECK(label.empty());
+    }
 }

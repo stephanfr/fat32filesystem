@@ -77,6 +77,7 @@ namespace filesystems::fat32
               logical_sectors_per_cluster_(adapter_to_copy.logical_sectors_per_cluster_),
               bytes_per_sector_(adapter_to_copy.bytes_per_sector_),
               sectors_per_fat_(adapter_to_copy.sectors_per_fat_),
+              number_of_fats_(adapter_to_copy.number_of_fats_),
               first_lba_sector_(adapter_to_copy.first_lba_sector_),
               fat_lba_(adapter_to_copy.fat_lba_),
               data_lba_(adapter_to_copy.data_lba_),
@@ -263,6 +264,7 @@ namespace filesystems::fat32
         const uint32_t bytes_per_sector_;
 
         const uint32_t sectors_per_fat_;
+        const uint32_t number_of_fats_;
 
         const LogicalBlockAddress first_lba_sector_;
         const LogicalBlockAddress fat_lba_;
@@ -271,7 +273,7 @@ namespace filesystems::fat32
 
         const uint32_t fat32_entries_per_block_;
 
-        FAT32ClusterIndex last_empty_cluster_found_;
+        mutable FAT32ClusterIndex last_empty_cluster_found_;
 
         //
         //  Private methods
@@ -296,16 +298,18 @@ namespace filesystems::fat32
                             uint32_t root_directory_cluster,
                             uint32_t logical_sectors_per_cluster,
                             uint32_t bytes_per_sector,
-                        uint32_t sectors_per_fat,
+                            uint32_t sectors_per_fat,
+                            uint32_t number_of_fats,
                             uint32_t first_lba_sector,
                             uint32_t fat_lba,
-                        uint32_t data_lba,
-                        uint32_t maximum_cluster_number)
+                            uint32_t data_lba,
+                            uint32_t maximum_cluster_number)
             : io_device_(&io_device),
               root_directory_cluster_(root_directory_cluster),
               logical_sectors_per_cluster_(logical_sectors_per_cluster),
               bytes_per_sector_(bytes_per_sector),
               sectors_per_fat_(sectors_per_fat),
+              number_of_fats_(number_of_fats),
               first_lba_sector_(first_lba_sector),
               fat_lba_(fat_lba),
               data_lba_(data_lba),

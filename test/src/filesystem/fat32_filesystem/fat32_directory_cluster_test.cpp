@@ -200,4 +200,42 @@ namespace
         CHECK(copied_entry.Successful());
         CHECK(copied_entry->CompactName() == expected_name);
     }
+
+    TEST(FAT32DirectoryClusterTest, RemoveEntryAtFirstIndexOfFirstClusterSucceeds)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        FAT32ClusterIndex root_cluster = test_fat32->BlockIOAdapter().RootDirectoryCluster();
+
+        FAT32DirectoryCluster directory(test_fat32->Id(), test_fat32->BlockIOAdapter(), root_cluster);
+
+        //  Index 0 of the first cluster (the volume label) has nothing in front of it, so the
+        //      backwards LFN scan has nowhere to go.  That is success.
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS,
+                    directory.RemoveEntry(FAT32DirectoryEntryAddress(root_cluster, 0)));
+    }
+
+    TEST(FAT32DirectoryClusterTest, MoveToDirectoryRejectsNonDataClusters)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        FAT32ClusterIndex root_cluster = test_fat32->BlockIOAdapter().RootDirectoryCluster();
+        FAT32ClusterIndex max_cluster = test_fat32->BlockIOAdapter().MaximumClusterNumber();
+
+        FAT32DirectoryCluster directory(test_fat32->Id(), test_fat32->BlockIOAdapter(), root_cluster);
+
+        CHECK_EQUAL(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE, directory.MoveToDirectory(FAT32ClusterIndex(0)));
+        CHECK_EQUAL(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE, directory.MoveToDirectory(FAT32ClusterIndex(1)));
+        CHECK_EQUAL(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE, directory.MoveToDirectory(FAT32ClusterIndex((uint32_t)max_cluster + 1)));
+        CHECK_EQUAL(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE, directory.MoveToDirectory(FAT32EntryAllocatedAndEndOfFile));
+
+        //  SUBDIR1 is cluster 3.
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, directory.MoveToDirectory(FAT32ClusterIndex(3)));
+    }
 }

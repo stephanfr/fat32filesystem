@@ -632,20 +632,36 @@ namespace
 
         CHECK(test_fat32.Successful());
 
-        //  Fill the last couple of clusters
+        FAT32BlockIOAdapter &adapter = test_fat32->BlockIOAdapter();
 
-        FAT32ClusterIndex max_ci_minus_2 = FAT32ClusterIndex((uint32_t)test_fat32->BlockIOAdapter().MaximumClusterNumber() - 2);
-        FAT32ClusterIndex max_ci_minus_1 = FAT32ClusterIndex((uint32_t)test_fat32->BlockIOAdapter().MaximumClusterNumber() - 1);
+        //  The search wraps around the volume, so the device is only full when every cluster is
+        //      allocated.  test_fat32.img has about 68,500 free clusters; allocating them all
+        //      against the in-memory device takes well under a second.
 
-        test_fat32->BlockIOAdapter().UpdateFATTableEntry(max_ci_minus_2, max_ci_minus_1);
-        test_fat32->BlockIOAdapter().UpdateFATTableEntry(max_ci_minus_1, test_fat32->BlockIOAdapter().MaximumClusterNumber());
-        test_fat32->BlockIOAdapter().UpdateFATTableEntry(test_fat32->BlockIOAdapter().MaximumClusterNumber(), FAT32EntryAllocatedAndEndOfFile);
+        const uint32_t max_cluster = (uint32_t)adapter.MaximumClusterNumber();
 
-        //  Starting search from mx_ci minus 2 should give us device full
+        for (uint32_t cluster = 2; cluster <= max_cluster; cluster++)
+        {
+            auto entry = adapter.NextClusterInChain(FAT32ClusterIndex(cluster));
 
-        auto result = test_fat32->BlockIOAdapter().FindNextEmptyCluster(max_ci_minus_2);
+            CHECK(entry.Successful());
 
-        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_DEVICE_FULL, result.ResultCode());
+            if (*entry == FAT32EntryFree)
+            {
+                CHECK_EQUAL(FilesystemResultCodes::SUCCESS,
+                            adapter.UpdateFATTableEntry(FAT32ClusterIndex(cluster), FAT32EntryAllocatedAndEndOfFile));
+            }
+        }
+
+        //  Starting near the top, at the bottom, or with no hint: there is nowhere to go.
+
+        auto from_top = adapter.FindNextEmptyCluster(FAT32ClusterIndex(max_cluster - 2));
+        auto from_root = adapter.FindNextEmptyCluster(adapter.RootDirectoryCluster());
+        auto no_hint = adapter.FindNextEmptyCluster();
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_DEVICE_FULL, from_top.ResultCode());
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_DEVICE_FULL, from_root.ResultCode());
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_DEVICE_FULL, no_hint.ResultCode());
     }
 
     TEST(FAT32BlockIOAdapterTest, FindNextEmptyClusterClusterIndexOutOfRangeTest)
@@ -695,5 +711,131 @@ namespace
         test_fat32->BlockIOAdapter().UpdateFATTableEntry(FAT32ClusterIndex(6003), FAT32ClusterIndex(FAT32EntryAllocatedAndEndOfFile));
 
         CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE, test_fat32->BlockIOAdapter().ReleaseChain(FAT32ClusterIndex(0)));
+    }
+
+    TEST(FAT32BlockIOAdapterTest, FindNextEmptyClusterCanAllocateMaximumCluster)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        FAT32ClusterIndex max_cluster = test_fat32->BlockIOAdapter().MaximumClusterNumber();
+        FAT32ClusterIndex max_minus_one = FAT32ClusterIndex((uint32_t)max_cluster - 1);
+
+        //  Occupy the one below the maximum so the maximum is the only candidate left.
+
+        test_fat32->BlockIOAdapter().UpdateFATTableEntry(max_minus_one, FAT32EntryAllocatedAndEndOfFile);
+
+        //  The '>=' comparison excluded the maximum cluster, reporting the device full one
+        //      cluster early.
+
+        CHECK_SUCCESSFUL_AND_EQUAL((uint32_t)max_cluster,
+                                   test_fat32->BlockIOAdapter().FindNextEmptyCluster(max_minus_one));
+    }
+
+    TEST(FAT32BlockIOAdapterTest, FindNextEmptyClusterReusesFreedClusters)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        FAT32ClusterIndex max_cluster = test_fat32->BlockIOAdapter().MaximumClusterNumber();
+
+        //  Drive the search high-water mark up to the end of the volume.
+
+        auto high = test_fat32->BlockIOAdapter().FindNextEmptyCluster(FAT32ClusterIndex((uint32_t)max_cluster - 1));
+
+        CHECK(high.Successful());
+
+        test_fat32->BlockIOAdapter().UpdateFATTableEntry(*high, FAT32EntryAllocatedAndEndOfFile);
+        test_fat32->BlockIOAdapter().UpdateFATTableEntry(max_cluster, FAT32EntryAllocatedAndEndOfFile);
+
+        //  Free a low cluster, then ask for one with no starting hint.  The search starts at
+        //      the high-water mark and never wrapped, so this reported FAT32_DEVICE_FULL on a
+        //      volume that is almost entirely empty.
+
+        test_fat32->BlockIOAdapter().UpdateFATTableEntry(FAT32ClusterIndex(40), FAT32EntryFree);
+
+        CHECK(test_fat32->BlockIOAdapter().FindNextEmptyCluster().Successful());
+    }
+
+    TEST(FAT32BlockIOAdapterTest, UpdateFATTableEntryMirrorsToAllFATs)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS,
+                    test_fat32->BlockIOAdapter().UpdateFATTableEntry(FAT32ClusterIndex(50), FAT32ClusterIndex(51)));
+
+        //  test_fat32.img has 2 FATs of 536 sectors each, the first at the reserved sector
+        //      count (32).  Read the same offset out of FAT #2 directly.  Sector numbers are
+        //      partition-relative; add the partition's first LBA if the device read is absolute.
+
+        const uint32_t sectors_per_fat = test_fat32->BlockIOAdapter().SectorsPerFAT();
+        const uint32_t entries_per_block = test_fat32->BlockIOAdapter().FATEntriesPerBlock();
+
+        const uint32_t fat1_sector = 32 + (50 / entries_per_block);
+        const uint32_t fat2_sector = fat1_sector + sectors_per_fat;
+
+        uint8_t fat1_block[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+        uint8_t fat2_block[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(fat1_block, fat1_sector, 1).Successful());
+        CHECK(test_device->ReadFromBlock(fat2_block, fat2_sector, 1).Successful());
+
+        const uint32_t offset = (50 % entries_per_block) * sizeof(uint32_t);
+
+        //  Pre-fix FAT #2 still holds whatever mkfs wrote.
+
+        CHECK_EQUAL(ReadU32LE(fat1_block, offset), ReadU32LE(fat2_block, offset));
+        CHECK_EQUAL(51U, ReadU32LE(fat2_block, offset) & 0x0FFFFFFF);
+    }
+
+        TEST(FAT32BlockIOAdapterTest, NextClusterInChainMasksReservedBits)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        const uint32_t entries_per_block = test_fat32->BlockIOAdapter().FATEntriesPerBlock();
+        const uint32_t fat_sector = 32 + (60 / entries_per_block);
+        const uint32_t offset = (60 % entries_per_block) * sizeof(uint32_t);
+
+        uint8_t fat_block[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(fat_block, fat_sector, 1).Successful());
+
+        WriteU32LE(fat_block, offset, 0xA000003D);      //  reserved nibble 0xA, cluster 61
+
+        CHECK(test_device->WriteBlock(fat_block, fat_sector, 1).Successful());
+
+        CHECK_SUCCESSFUL_AND_EQUAL(61U, test_fat32->BlockIOAdapter().NextClusterInChain(FAT32ClusterIndex(60)));
+    }
+
+    TEST(FAT32BlockIOAdapterTest, UpdateFATTableEntryPreservesReservedBits)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        const uint32_t entries_per_block = test_fat32->BlockIOAdapter().FATEntriesPerBlock();
+        const uint32_t fat_sector = 32 + (62 / entries_per_block);
+        const uint32_t offset = (62 % entries_per_block) * sizeof(uint32_t);
+
+        uint8_t fat_block[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(fat_block, fat_sector, 1).Successful());
+
+        WriteU32LE(fat_block, offset, 0xB0000000);
+
+        CHECK(test_device->WriteBlock(fat_block, fat_sector, 1).Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS,
+                    test_fat32->BlockIOAdapter().UpdateFATTableEntry(FAT32ClusterIndex(62), FAT32ClusterIndex(63)));
+
+        CHECK(test_device->ReadFromBlock(fat_block, fat_sector, 1).Successful());
+
+        CHECK_EQUAL(0xB000003FU, ReadU32LE(fat_block, offset));
     }
 }
