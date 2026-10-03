@@ -109,7 +109,7 @@ namespace
         CHECK(second_cluster.Successful());
 
         //  Root cluster 2 is full and cluster 12 has idx 0-1 in use, so an 8.3 directory
-        //      (which needs a 2-slot hole) lands at cluster 12 idx 2.
+        //      (one slot, plus one for the new end-of-directory marker) lands at cluster 12 idx 2.
 
         CHECK(root->CreateDirectory(minstd::fixed_string<>("OLDDIR")).Successful());
 
@@ -164,8 +164,8 @@ namespace
         CHECK(second_cluster.Successful());
 
         //  Cluster 12 has idx 0-1 in use.  A 136-character name needs 11 LFN entries plus the
-        //      short entry.  FindEmptyBlockOfEntries asks for 11 + 2 = 13 free slots; idx 2-15
-        //      has 14, so the name fills idx 2-13 and leaves exactly idx 14-15 free.
+        //      short entry: 12 slots, plus 1 for the end-of-directory marker because the run
+        //      reaches it = 13.  idx 2-15 has 14, so the name fills idx 2-13 and leaves exactly idx 14-15 free.
 
         char filler[137];
 
@@ -180,10 +180,10 @@ namespace
 
         const uint32_t lfn_after_filler = CountLiveLFNEntries(*second_cluster);
 
-        //  A 25-character name needs 2 LFN entries plus the short entry, and the search asks
-        //      for 2 + 2 = 4 free slots.  Only 2 remain, so the directory grows, and the run
-        //      idx 14-15 + new idx 0-1 qualifies.  The LFN entries go in cluster 12 idx 14-15
-        //      and the short entry goes in idx 0 of the new third cluster.
+        //  A 25-character name needs 2 LFN entries plus the short entry: 3 slots, plus 1 for
+        //      the end-of-directory marker = 4.  Only 2 remain, so the directory grows, and the
+        //      run idx 14-15 + new idx 0-1 qualifies.  The LFN entries go in cluster 12 idx
+        //      14-15 and the short entry goes in idx 0 of the new third cluster.
 
         minstd::fixed_string<MAX_FILENAME_LENGTH> straddling_name("straddling_entry_name.dat");
 
@@ -201,8 +201,7 @@ namespace
         CHECK((uint32_t)*third_cluster < (uint32_t)FAT32EntryEOFThreshold);
         CHECK_EQUAL(lfn_after_filler + 2, CountLiveLFNEntries(*second_cluster));
 
-        //  Deleting must clear the two LFN entries left behind in cluster 12.  Pre-fix the
-        //      backwards walk started from cluster 0, failed, and the failure was discarded.
+        //  Deleting must clear the two LFN entries left behind in cluster 12.
 
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, root->DeleteFile(straddling_name));
 

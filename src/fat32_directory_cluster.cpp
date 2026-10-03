@@ -844,7 +844,7 @@ namespace filesystems::fat32
     FilesystemResultCodes FAT32DirectoryCluster::WriteEmptyDirectoryCluster(FAT32ClusterIndex cluster_index,
                                                                             FAT32ClusterIndex dot_dot_cluster_index)
     {
-        //  Allocate a buffer for the cluster on the stack.
+        //  Allocate a buffer for the cluster
 
         minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter_.BytesPerCluster());
         uint8_t *block_buffer = cluster_buffer.data();
