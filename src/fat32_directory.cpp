@@ -208,12 +208,7 @@ namespace filesystems::fat32
 
         minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> directory_absolute_path(path_);
 
-        if (directory_absolute_path != "/")
-        {
-            directory_absolute_path += "/";
-        }
-
-        directory_absolute_path += directory_name;
+        AppendToPath(directory_absolute_path, directory_name);
 
         //  Check the cache for the directory
 
@@ -330,12 +325,7 @@ namespace filesystems::fat32
 
         minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> path(path_);
 
-        if (path != "/")
-        {
-            path += "/";
-        }
-
-        path += new_directory_name;
+        AppendToPath(path, new_directory_name);
 
         minstd::unique_ptr<FilesystemDirectory> new_directory(AsFilesystemDirectory(filesystem.Id(),
                                                                                     path,

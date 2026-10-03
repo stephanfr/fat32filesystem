@@ -230,7 +230,7 @@ namespace
         CHECK_EQUAL(lfn_in_first_cluster_before - 2, CountLiveLFNEntries(root_cluster));
     }
 
-        TEST(FAT32DirectoryTest, DeleteFilePropagatesRemoveEntryFailure)
+    TEST(FAT32DirectoryTest, DeleteFilePropagatesRemoveEntryFailure)
     {
         auto root = test_fs.RootDirectory();
 

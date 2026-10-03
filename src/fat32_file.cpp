@@ -205,7 +205,7 @@ namespace filesystems::fat32
         {
             return FilesystemResultCodes::FILE_NOT_OPENED_FOR_WRITE;
         }
-        
+
         //  Get the filesystem entity
 
         auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(filesystem_uuid_);
@@ -353,10 +353,17 @@ namespace filesystems::fat32
     {
         LogEntryAndExit("Entering\n");
 
+        //  Reject before seeking - a read-only handle must not have its position moved by a
+        //      call it was never allowed to make.
+
+        if (!HasFileMode(mode_, FileModes::WRITE) && !HasFileMode(mode_, FileModes::APPEND))
+        {
+            return FilesystemResultCodes::FILE_NOT_OPENED_FOR_WRITE;
+        }
+
         //  Move to the end of the file
 
         FilesystemResultCodes seek_result = SeekEnd();
-
         if (seek_result != FilesystemResultCodes::SUCCESS)
         {
             return seek_result;

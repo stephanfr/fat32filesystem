@@ -162,7 +162,7 @@ namespace filesystems::fat32
 
         //  Move the filename, dropping spaces used for padding, add the period then append the extension
 
-        while ((*src != ' ') && (bytes_copied < 8))
+        while ((bytes_copied < 8) && (*src != ' '))
         {
             buffer.push_back(*src++);
             bytes_copied++;
@@ -175,7 +175,7 @@ namespace filesystems::fat32
             src = compact_name_.extension_;
             bytes_copied = 0;
 
-            while ((*src != ' ') && (bytes_copied < 3))
+            while ((bytes_copied < 3) && (*src != ' '))
             {
                 buffer.push_back(*src++);
                 bytes_copied++;

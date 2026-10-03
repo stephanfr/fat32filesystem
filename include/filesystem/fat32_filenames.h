@@ -202,7 +202,7 @@ namespace filesystems::fat32
             //  Move the filename, dropping spaces used for padding and extract the extension
             //      We will assume the compact filename is coming off the platter and is OK, so do not scrub the name or extension.
 
-            while ((*src != ' ') && (bytes_copied < 8))
+            while ((bytes_copied < 8) && (*src != ' '))
             {
                 name_.push_back(*src++);
                 bytes_copied++;
@@ -213,7 +213,7 @@ namespace filesystems::fat32
                 src = compact_filename.extension_;
                 bytes_copied = 0;
 
-                while ((*src != ' ') && (bytes_copied < 3))
+                while ((bytes_copied < 3) && (*src != ' '))
                 {
                     extension_.push_back(*src++);
                     bytes_copied++;

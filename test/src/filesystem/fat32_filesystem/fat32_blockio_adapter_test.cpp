@@ -775,7 +775,7 @@ namespace
         const uint32_t sectors_per_fat = test_fat32->BlockIOAdapter().SectorsPerFAT();
         const uint32_t entries_per_block = test_fat32->BlockIOAdapter().FATEntriesPerBlock();
 
-        const uint32_t fat1_sector = 32 + (50 / entries_per_block);
+        const uint32_t fat1_sector = FirstPartitionSector() + 32 + (50 / entries_per_block);
         const uint32_t fat2_sector = fat1_sector + sectors_per_fat;
 
         uint8_t fat1_block[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
@@ -792,14 +792,14 @@ namespace
         CHECK_EQUAL(51U, ReadU32LE(fat2_block, offset) & 0x0FFFFFFF);
     }
 
-        TEST(FAT32BlockIOAdapterTest, NextClusterInChainMasksReservedBits)
+    TEST(FAT32BlockIOAdapterTest, NextClusterInChainMasksReservedBits)
     {
         auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
 
         CHECK(test_fat32.Successful());
 
         const uint32_t entries_per_block = test_fat32->BlockIOAdapter().FATEntriesPerBlock();
-        const uint32_t fat_sector = 32 + (60 / entries_per_block);
+        const uint32_t fat_sector = FirstPartitionSector() + 32 + (60 / entries_per_block);
         const uint32_t offset = (60 % entries_per_block) * sizeof(uint32_t);
 
         uint8_t fat_block[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
@@ -820,7 +820,7 @@ namespace
         CHECK(test_fat32.Successful());
 
         const uint32_t entries_per_block = test_fat32->BlockIOAdapter().FATEntriesPerBlock();
-        const uint32_t fat_sector = 32 + (62 / entries_per_block);
+        const uint32_t fat_sector = FirstPartitionSector() + 32 + (50 / entries_per_block);
         const uint32_t offset = (62 % entries_per_block) * sizeof(uint32_t);
 
         uint8_t fat_block[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
@@ -837,5 +837,29 @@ namespace
         CHECK(test_device->ReadFromBlock(fat_block, fat_sector, 1).Successful());
 
         CHECK_EQUAL(0xB000003FU, ReadU32LE(fat_block, offset));
+    }
+
+    TEST(FAT32BlockIOAdapterTest, FindNextEmptyClusterIgnoresReservedBits)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        //  Cluster 70 is free in test_fat32.img.  Give its entry a non-zero reserved nibble;
+        //      only the low 28 bits decide whether a cluster is free, so it still is.
+
+        const uint32_t entries_per_block = test_fat32->BlockIOAdapter().FATEntriesPerBlock();
+        const uint32_t fat_sector = FirstPartitionSector() + 32 + (70 / entries_per_block);
+        const uint32_t offset = (70 % entries_per_block) * sizeof(uint32_t);
+
+        uint8_t fat_block[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(fat_block, fat_sector, 1).Successful());
+
+        WriteU32LE(fat_block, offset, 0xA0000000);
+
+        CHECK(test_device->WriteBlock(fat_block, fat_sector, 1).Successful());
+
+        CHECK_SUCCESSFUL_AND_EQUAL(70U, test_fat32->BlockIOAdapter().FindNextEmptyCluster(FAT32ClusterIndex(70)));
     }
 }

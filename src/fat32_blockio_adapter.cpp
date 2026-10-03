@@ -453,7 +453,7 @@ namespace filesystems::fat32
                 continue;
             }
 
-            if (current_fat[current_cluster % fat32_entries_per_block_] == FAT32EntryFree)
+            if ((current_fat[current_cluster % fat32_entries_per_block_] & 0x0FFFFFFF) == FAT32EntryFree)
             {
                 break;
             }
@@ -472,7 +472,7 @@ namespace filesystems::fat32
         //  We will fake it here as this new cluster is likely to be used and will update the last used cluster
 
         last_empty_cluster_found_ = minstd::max(last_empty_cluster_found_, FAT32ClusterIndex(current_cluster));
-        
+
         //  Return the cluster
 
         return Result::Success(FAT32ClusterIndex(current_cluster));

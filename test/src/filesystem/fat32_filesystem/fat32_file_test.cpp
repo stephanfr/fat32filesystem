@@ -24,7 +24,7 @@ namespace
         {
             uint8_t byte = value;
 
-            buffer.append(&byte, 1);        //  confirm minstd::buffer::append's signature once
+            buffer.append(&byte, 1);
         }
     }
 
@@ -160,5 +160,33 @@ namespace
 
         //  A second Close() on the same handle is a use-after-free until RemoveFile hands back
         //      the owning unique_ptr.  Do not add that call here until it does.
+    }
+
+    TEST(FAT32FileTest, RejectedAppendDoesNotMoveTheReadPosition)
+    {
+        auto root = test_fs.RootDirectory();
+
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        auto file = (*subdir)->OpenFile(minstd::fixed_string<MAX_FILENAME_LENGTH>("Lorem ipsum dolor sit amet.text"), FileModes::READ);
+
+        CHECK(file.Successful());
+
+        minstd::heap_buffer<uint8_t> payload(__os_dynamic_heap_resource, 16);
+
+        FillBuffer(payload, 0xEE, 16);
+
+        CHECK_EQUAL(FilesystemResultCodes::FILE_NOT_OPENED_FOR_WRITE, (*file)->Append(payload));
+
+        //  The handle was never allowed to append, so it must still be at the start of the 992-byte file.
+
+        minstd::heap_buffer<uint8_t> read_back(__os_dynamic_heap_resource, 1024);
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Read(read_back));
+        CHECK_EQUAL(992, read_back.size());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
     }
 }
