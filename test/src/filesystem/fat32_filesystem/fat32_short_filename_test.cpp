@@ -501,4 +501,16 @@ namespace
         STRCMP_EQUAL("TXT", short_filename.Extension().c_str());
         CHECK_FALSE(short_filename.LossyConversion());
     }
+
+    TEST(FAT32ShortFilename, LeadingPeriodIsNotAnExtensionSeparator)
+    {
+        FAT32ShortFilename short_filename = FAT32LongFilename(".ab").GetBasisName();
+
+        STRCMP_EQUAL("AB~1", short_filename.Name().c_str());
+        STRCMP_EQUAL("", short_filename.Extension().c_str());
+
+        FAT32ShortFilename not_8_3;
+
+        CHECK_FALSE(FAT32LongFilename(".AB").Is8Dot3Filename(not_8_3));
+    }
 }

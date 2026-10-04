@@ -85,7 +85,8 @@ namespace filesystems::fat32
               fat32_entries_per_block_(adapter_to_copy.fat32_entries_per_block_),
               last_empty_cluster_found_(adapter_to_copy.last_empty_cluster_found_),
               fsinfo_sector_(adapter_to_copy.fsinfo_sector_),
-              fsinfo_invalidated_(adapter_to_copy.fsinfo_invalidated_)
+              fsinfo_invalidated_(adapter_to_copy.fsinfo_invalidated_),
+              mirror_fats_(adapter_to_copy.mirror_fats_)
         {
         }
 
@@ -280,6 +281,7 @@ namespace filesystems::fat32
         const uint32_t fsinfo_sector_;
         bool fsinfo_invalidated_ = false;
 
+        const bool mirror_fats_;
 
         //
         //  Private methods
@@ -299,6 +301,7 @@ namespace filesystems::fat32
          * @param first_lba_sector The logical block address (LBA) of the first sector of the partition.
          * @param fat_lba The LBA of the first sector of the FAT.
          * @param data_lba The LBA of the first sector of the data region.
+         * @param mirror_fats True if FAT updates are mirrored to every FAT, false if only the active FAT is written.
          */
         FAT32BlockIOAdapter(BlockIODevice &io_device,
                             uint32_t root_directory_cluster,
@@ -310,7 +313,8 @@ namespace filesystems::fat32
                             uint32_t fat_lba,
                             uint32_t data_lba,
                             uint32_t maximum_cluster_number,
-                            uint32_t fsinfo_sector)
+                            uint32_t fsinfo_sector,
+                            bool mirror_fats)
             : io_device_(&io_device),
               root_directory_cluster_(root_directory_cluster),
               logical_sectors_per_cluster_(logical_sectors_per_cluster),
@@ -323,7 +327,8 @@ namespace filesystems::fat32
               maximum_cluster_number_(maximum_cluster_number),
               fat32_entries_per_block_(io_device_->BlockSize() / sizeof(uint32_t)),
               last_empty_cluster_found_(0),
-              fsinfo_sector_(fsinfo_sector)
+              fsinfo_sector_(fsinfo_sector),
+              mirror_fats_(mirror_fats)
         {
         }
 

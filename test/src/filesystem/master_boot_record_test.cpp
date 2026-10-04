@@ -136,4 +136,56 @@ namespace
         CHECK_EQUAL(1, partitions.size());
         CHECK(partitions[0].IsBoot());
     }
+
+    TEST(MasterBootRecord, FAT32CHSPartitionTypeIsRecognised)
+    {
+        ut_utility::InMemoryFileBlockIODevice test_device("UNIT_TEST_FAT32_CHS");
+
+        CHECK(test_device.Open("./test/data/empty_fat32.img"));
+
+        uint8_t mbr_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+        CHECK(test_device.ReadFromBlock(mbr_buffer, 0, 1).Successful());
+
+        //  0x0B (FAT32 with CHS addressing) is FAT32 just as 0x0C (FAT32 LBA) is.
+
+        mbr_buffer[0x1BE + 4] = 0x0B;
+
+        CHECK(test_device.WriteBlock(mbr_buffer, 0, 1).Successful());
+
+        alignas(MassStoragePartition) uint8_t partition_buffer[sizeof(MassStoragePartition) * MAX_PARTITIONS_ON_MASS_STORAGE_DEVICE + alignof(MassStoragePartition) * MAX_PARTITIONS_ON_MASS_STORAGE_DEVICE];
+        minstd::pmr::monotonic_buffer_resource partition_resource(partition_buffer, sizeof(partition_buffer), nullptr);
+        minstd::pmr::polymorphic_allocator<MassStoragePartition> partition_allocator(&partition_resource);
+
+        MassStoragePartitions partitions(partition_allocator);
+
+        CHECK(GetPartitions(test_device, partitions) == FilesystemResultCodes::SUCCESS);
+        CHECK_EQUAL(1, partitions.size());
+        STRCMP_EQUAL("EMPTYFAT32", partitions[0].Name().c_str());
+    }
+
+    TEST(MasterBootRecord, UnlabelledVolumeIsMountedAsNoName)
+    {
+        ut_utility::InMemoryFileBlockIODevice test_device("UNIT_TEST_NO_LABEL");
+
+        CHECK(test_device.Open("./test/data/empty_fat32.img"));
+
+        //  The volume label is root directory entry 0, in sector 1104.  Mark it deleted.
+
+        uint8_t root_buffer[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+        CHECK(test_device.ReadFromBlock(root_buffer, 1104, 1).Successful());
+
+        root_buffer[0] = 0xE5;
+
+        CHECK(test_device.WriteBlock(root_buffer, 1104, 1).Successful());
+
+        alignas(MassStoragePartition) uint8_t partition_buffer[sizeof(MassStoragePartition) * MAX_PARTITIONS_ON_MASS_STORAGE_DEVICE + alignof(MassStoragePartition) * MAX_PARTITIONS_ON_MASS_STORAGE_DEVICE];
+        minstd::pmr::monotonic_buffer_resource partition_resource(partition_buffer, sizeof(partition_buffer), nullptr);
+        minstd::pmr::polymorphic_allocator<MassStoragePartition> partition_allocator(&partition_resource);
+
+        MassStoragePartitions partitions(partition_allocator);
+
+        CHECK(GetPartitions(test_device, partitions) == FilesystemResultCodes::SUCCESS);
+        CHECK_EQUAL(1, partitions.size());
+        STRCMP_EQUAL("NO NAME", partitions[0].Name().c_str());
+    }
 }

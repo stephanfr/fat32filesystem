@@ -43,6 +43,8 @@ namespace filesystems::fat32
 
         FAT32DirectoryCluster::directory_entry_const_iterator itr = current_directory.directory_entry_iterator_begin();
 
+        ReturnOnCallFailure(itr++);
+
         while (!itr.end())
         {
             auto current_entry = itr.AsDirectoryEntry();
@@ -383,6 +385,8 @@ namespace filesystems::fat32
 
             auto itr = contents.directory_entry_iterator_begin();
 
+            ReturnOnCallFailure(itr++);
+
             while (!itr.end())
             {
                 auto entry = itr.AsClusterEntry();
@@ -522,8 +526,8 @@ namespace filesystems::fat32
                                                 block_io_adapter,
                                                 FirstCluster());
 
-        auto new_file_directory_entry = directory_cluster.CreateEntry(filename,
-                                                                      FAT32DirectoryEntryAttributeFlags::FAT32DirectoryEntryAttributeFile,
+         auto new_file_directory_entry = directory_cluster.CreateEntry(filename,
+                                                                      FAT32DirectoryEntryAttributeFlags::FAT32DirectoryEntryAttributeArchive,
                                                                       FAT32TimeHundredths(0),
                                                                       FAT32Time(0, 0, 0),
                                                                       FAT32Date(1980, 1, 1),

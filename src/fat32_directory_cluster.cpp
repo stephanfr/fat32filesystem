@@ -160,7 +160,16 @@ namespace filesystems::fat32
 
     void FAT32DirectoryClusterEntry::AsShortFilename(FAT32ShortFilename &short_filename) const
     {
-        short_filename = FAT32ShortFilename(compact_name_);
+        //  A stored 0x05 in byte 0 stands for a real 0xE5 (0xE5 itself would mean "deleted").
+
+        FAT32Compact8Dot3Filename name(compact_name_);
+
+        if (name.FirstChar() == 0x05)
+        {
+            name.name_[0] = static_cast<char>(0xE5);
+        }
+
+        short_filename = FAT32ShortFilename(name);
     }
 
     void FAT32DirectoryClusterEntry::Compact8Dot3Filename(minstd::string &buffer) const
@@ -174,7 +183,10 @@ namespace filesystems::fat32
 
         while ((bytes_copied < 8) && (*src != ' '))
         {
-            buffer.push_back(*src++);
+            //  A stored 0x05 in byte 0 stands for a real 0xE5 (0xE5 itself would mean "deleted").
+
+            buffer.push_back(((bytes_copied == 0) && (static_cast<uint8_t>(*src) == 0x05)) ? static_cast<char>(0xE5) : *src);
+            src++;
             bytes_copied++;
         }
 
@@ -593,6 +605,8 @@ namespace filesystems::fat32
 
             auto itr = directory_entry_iterator_begin();
 
+            ReturnOnCallFailure(itr++);
+
             bool index_in_use[MAX_FAT32_SHORT_FILENAME_SEARCH_TABLE_SIZE + 1] = {false};
 
             while (!itr.end())
@@ -823,13 +837,42 @@ namespace filesystems::fat32
     {
         using Result = FilesystemResultCodes;
 
-        //  Find the next empty cluster in the FAT Table
+        //  Walk to the last cluster of the directory, counting as we go.  A directory may hold at most
+        //      MAX_DIRECTORY_ENTRIES entries, so a directory already at that size cannot grow, and a
+        //      chain longer than that is corrupt - most likely a cycle, which would otherwise loop forever.
+
+        FAT32ClusterIndex last_cluster = first_cluster_;
+        uint32_t cluster_count = 1;
+
+        while (true)
+        {
+            auto next_cluster = block_io_adapter_.NextClusterInChain(last_cluster);
+
+            ReturnOnFailure(next_cluster);
+
+            if (*next_cluster >= FAT32EntryEOFThreshold)
+            {
+                break;
+            }
+
+            if (++cluster_count > MaximumDirectoryClusters())
+            {
+                return FilesystemResultCodes::FAT32_CLUSTER_CHAIN_IS_CORRUPT;
+            }
+
+            last_cluster = *next_cluster;
+        }
+
+        if (cluster_count >= MaximumDirectoryClusters())
+        {
+            return FilesystemResultCodes::FAT32_UNABLE_TO_FIND_EMPTY_BLOCK_OF_DIRECTORY_ENTRIES;
+        }
+
+        //  Find the next empty cluster and zero it - a zeroed cluster is a run of end-of-directory markers.
 
         auto next_empty_cluster = block_io_adapter_.FindNextEmptyCluster();
 
         ReturnOnFailure(next_empty_cluster);
-
-        //  Zero out the cluster
 
         minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter_.BytesPerCluster());
         uint8_t *block_buffer = cluster_buffer.data();
@@ -844,38 +887,22 @@ namespace filesystems::fat32
             return FilesystemResultCodes::FAT32_DEVICE_WRITE_ERROR;
         }
 
-        //  Update the FAT Table for the directory to add this new cluster to the chain.
-        //      First, we have to walk the FAT Table chain to find the last cluster in the chain.
+        //  Claim the new cluster before linking to it, so the chain never points at a free cluster.
 
-        FAT32ClusterIndex current_entry = first_cluster_;
+        ReturnOnCallFailure(block_io_adapter_.UpdateFATTableEntry(*next_empty_cluster, FAT32EntryAllocatedAndEndOfFile));
 
-        do
+        const FilesystemResultCodes link_result = block_io_adapter_.UpdateFATTableEntry(last_cluster, *next_empty_cluster);
+
+        if (link_result != FilesystemResultCodes::SUCCESS)
         {
-            auto next_entry = block_io_adapter_.NextClusterInChain(current_entry);
-            ReturnOnFailure(next_entry);
+            //  Release the unlinked cluster.  The rollback is best effort: the caller needs the
+            //      original failure, not the rollback's.
 
-            if (*next_entry >= FAT32EntryEOFThreshold)
-            {
-                break;
-            }
+            LogError("Failed to link new directory cluster %u after cluster %u\n", *next_empty_cluster, last_cluster);
 
-            current_entry = *next_entry;
-        } while (true);
+            block_io_adapter_.UpdateFATTableEntry(*next_empty_cluster, FAT32EntryFree);
 
-        FilesystemResultCodes update_result = block_io_adapter_.UpdateFATTableEntry(current_entry, *next_empty_cluster);
-
-        ReturnOnFailure(update_result);
-
-        update_result = block_io_adapter_.UpdateFATTableEntry(*next_empty_cluster, FAT32EntryAllocatedAndEndOfFile);
-
-        //  If the update of the next FAT Table entry failed, then we need to back out the previous update
-
-        if (update_result != FilesystemResultCodes::SUCCESS)
-        {
-            LogError("Failed to update FAT Table entry for new cluster, backing out previous update.  Cluster Indices: %u, %u\n", current_entry, *next_empty_cluster);
-
-            block_io_adapter_.UpdateFATTableEntry(current_entry, FAT32EntryAllocatedAndEndOfFile);
-            return update_result;
+            return link_result;
         }
 
         //  Finished with Success
@@ -970,6 +997,8 @@ namespace filesystems::fat32
         //  Iterate over the entries until we find the one we want, or we hit the end of the directory
 
         directory_entry_const_iterator itr = directory_entry_iterator_begin();
+
+        ReturnOnCallFailure(itr++);
 
         while (!itr.end())
         {
@@ -1091,6 +1120,13 @@ namespace filesystems::fat32
                 current_entry_.index_--;
                 location_ = Location::END;
                 return FilesystemResultCodes::SUCCESS;
+            }
+
+            //  No legal directory is longer than MAX_DIRECTORY_ENTRIES, therefore a longer chain is corrupt.
+
+            if (++clusters_visited_ > directory_cluster_.MaximumDirectoryClusters())
+            {
+                return FilesystemResultCodes::FAT32_CLUSTER_CHAIN_IS_CORRUPT;
             }
 
             current_entry_.cluster_ = next_cluster.Value();

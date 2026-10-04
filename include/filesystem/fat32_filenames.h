@@ -620,7 +620,7 @@ namespace filesystems::fat32
         {
             for (uint32_t i = 0; i < name_.size(); i++)
             {
-                if (!isprint(name_[i]) || (FORBIDDEN_LONG_FILENAME_CHARACTERS.find(name_[i]) != minstd::string::npos))
+                if (!isprint(static_cast<unsigned char>(name_[i])) || (FORBIDDEN_LONG_FILENAME_CHARACTERS.find(name_[i]) != minstd::string::npos))
                 {
                     return true;
                 }
@@ -639,12 +639,12 @@ namespace filesystems::fat32
          */
         void StripSpacesAndTrailingPeriods()
         {
-            while (name_[0] == ' ')
+            while (!name_.empty() && (name_[0] == ' '))
             {
                 name_.erase(0, 1);
             }
 
-            while ((name_.back() == ' ') || (name_.back() == '.'))
+            while (!name_.empty() && ((name_.back() == ' ') || (name_.back() == '.')))
             {
                 name_.pop_back();
             }

@@ -44,7 +44,10 @@ namespace filesystems::fat32
         FAT32DirectoryEntryAttributeDirectory = 0x10,
         FAT32DirectoryEntryAttributeArchive = 0x20,
 
-        FAT32DirectoryEntryAttributeLongFilename = FAT32DirectoryEntryAttributeReadOnly | FAT32DirectoryEntryAttributeHidden | FAT32DirectoryEntryAttributeSystem | FAT32DirectoryEntryAttributeVolumeId
+        FAT32DirectoryEntryAttributeLongFilename = FAT32DirectoryEntryAttributeReadOnly | FAT32DirectoryEntryAttributeHidden | FAT32DirectoryEntryAttributeSystem | FAT32DirectoryEntryAttributeVolumeId,
+
+        //  The top two attribute bits are reserved: an LFN entry is identified with them masked off.
+        FAT32DirectoryEntryAttributeLongFilenameMask = 0x3F
     } FAT32DirectoryAttributeFlags;
 
     /**
@@ -345,7 +348,7 @@ namespace filesystems::fat32
          */
         bool IsStandardEntry() const noexcept
         {
-            return (IsInUse() && (attributes_ != FAT32DirectoryEntryAttributeLongFilename));
+            return (IsInUse() && ((attributes_ & FAT32DirectoryEntryAttributeLongFilenameMask) != FAT32DirectoryEntryAttributeLongFilename));
         }
 
         /**
@@ -355,7 +358,7 @@ namespace filesystems::fat32
          */
         bool IsLongFilenameEntry() const noexcept
         {
-            return (IsInUse() && (attributes_ == FAT32DirectoryEntryAttributeLongFilename));
+            return (IsInUse() && ((attributes_ & FAT32DirectoryEntryAttributeLongFilenameMask) == FAT32DirectoryEntryAttributeLongFilename));
         }
 
         /**
@@ -1029,6 +1032,13 @@ namespace filesystems::fat32
 
         const uint32_t entries_per_cluster_;
 
+        static constexpr uint32_t MAX_DIRECTORY_ENTRIES = 65536;            //  The specification limits a directory to 65,536 entries (2 MB).
+
+        uint32_t MaximumDirectoryClusters() const noexcept
+        {
+            return MAX_DIRECTORY_ENTRIES / entries_per_cluster_;
+        }
+
         //
         //  Private methods
         //
@@ -1110,6 +1120,8 @@ namespace filesystems::fat32
 
         FAT32DirectoryClusterTable directory_entries_;
 
+        uint32_t clusters_visited_ = 1;
+
         /**
          * @brief Constructs an iterator base object.
          *
@@ -1158,7 +1170,8 @@ namespace filesystems::fat32
               buffer_(__os_dynamic_heap_resource, itr_to_copy.directory_cluster_.block_io_adapter_.BytesPerCluster()),
               buffer_is_empty_(itr_to_copy.buffer_is_empty_),
               current_entry_(itr_to_copy.current_entry_),
-              directory_entries_(buffer_.data())
+              directory_entries_(buffer_.data()),
+              clusters_visited_(itr_to_copy.clusters_visited_)
         {
             memcpy(buffer_.data(), itr_to_copy.buffer_.data(), directory_cluster_.block_io_adapter_.BytesPerCluster());
         }

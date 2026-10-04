@@ -534,4 +534,174 @@ namespace
         CHECK(file.Successful());
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
     }
+
+    TEST(FAT32DirectoryTest, EmptyRootDirectoryIsEmptyNotAnError)
+    {
+        //  A root with no live entries: empty_fat32.img with its volume label (root idx 0) deleted.
+
+        test_fs.Unmount();
+        CHECK(test_fs.Mount("./test/data/empty_fat32.img"));
+
+        const FAT32ClusterIndex root_cluster = test_fs.Adapter().RootDirectoryCluster();
+
+        minstd::heap_buffer<uint8_t> buffer(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(root_cluster, buffer.data()));
+        buffer.data()[0] = 0xE5;
+        CHECK(test_fs.Adapter().WriteCluster(root_cluster, buffer.data()) == BlockIOResultCodes::SUCCESS);
+
+        auto root = test_fs.RootDirectory();
+
+        //  Lookups find nothing - they do not fail.
+
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, root->GetDirectory(minstd::fixed_string<>("NOSUCH")).ResultCode());
+
+        //  And the directory can be written to.
+
+        auto file = root->OpenFile(minstd::fixed_string<>("NEW.TXT"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK(file.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+    }
+
+    TEST(FAT32DirectoryTest, LongNameEntryWithReservedAttributeBitsIsStillALongNameEntry)
+    {
+        //  Set reserved attribute bit 6 on Lorem's LFN ordinal 1 (SUBDIR1 cluster 3 idx 13).
+
+        minstd::heap_buffer<uint8_t> buffer(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(3), buffer.data()));
+        buffer.data()[(13 * 32) + 11] = 0x4F;
+        CHECK(test_fs.Adapter().WriteCluster(FAT32ClusterIndex(3), buffer.data()) == BlockIOResultCodes::SUCCESS);
+
+        auto root = test_fs.RootDirectory();
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        auto file = (*subdir)->OpenFile(minstd::fixed_string<MAX_FILENAME_LENGTH>("Lorem ipsum dolor sit amet.text"), FileModes::READ);
+
+        CHECK(file.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+    }
+
+    TEST(FAT32DirectoryTest, NewFilesAreMarkedArchive)
+    {
+        auto root = test_fs.RootDirectory();
+
+        auto file = root->OpenFile(minstd::fixed_string<>("ARCHIVE.TXT"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK(file.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+
+        //  Find the short entry in the root (chain 2 -> 12) and check its attribute byte.
+
+        minstd::heap_buffer<uint8_t> buffer(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        const uint32_t root_clusters[] = {2, 12};
+
+        uint32_t found = 0;
+
+        for (uint32_t cluster : root_clusters)
+        {
+            CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(cluster), buffer.data()));
+
+            for (uint32_t i = 0; i < test_fs.Adapter().BytesPerCluster() / 32; i++)
+            {
+                const uint8_t *entry = buffer.data() + (i * 32);
+
+                if (memcmp(entry, "ARCHIVE TXT", 11) == 0)
+                {
+                    CHECK_EQUAL(0x20, entry[11]);
+                    found++;
+                }
+            }
+        }
+
+        CHECK_EQUAL(1U, found);
+    }
+
+    TEST(FAT32DirectoryTest, DirectoryWithACyclicChainFailsInsteadOfHanging)
+    {
+        //  SUBDIR3 (cluster 5) holds only '.' and '..'.  Mark every other slot deleted, so there is
+        //      no end-of-directory marker, and point the cluster at itself.
+
+        const uint32_t bytes_per_cluster = test_fs.Adapter().BytesPerCluster();
+
+        minstd::heap_buffer<uint8_t> buffer(__os_dynamic_heap_resource, bytes_per_cluster);
+
+        CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(5), buffer.data()));
+
+        for (uint32_t i = 2; i < bytes_per_cluster / 32; i++)
+        {
+            buffer.data()[i * 32] = 0xE5;
+        }
+
+        CHECK(test_fs.Adapter().WriteCluster(FAT32ClusterIndex(5), buffer.data()) == BlockIOResultCodes::SUCCESS);
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, test_fs.Adapter().UpdateFATTableEntry(FAT32ClusterIndex(5), FAT32ClusterIndex(5)));
+
+        auto root = test_fs.RootDirectory();
+        auto subdir3 = root->GetDirectory(minstd::fixed_string<>("SUBDIR3"));
+
+        CHECK(subdir3.Successful());
+
+        auto file = (*subdir3)->OpenFile(minstd::fixed_string<>("NOFILE.TXT"), FileModes::READ);
+
+        CHECK_EQUAL(FilesystemResultCodes::FAT32_CLUSTER_CHAIN_IS_CORRUPT, file.ResultCode());
+    }
+
+    TEST(FAT32DirectoryTest, DirectoryCannotGrowPastTheSpecificationLimit)
+    {
+        FAT32BlockIOAdapter &adapter = test_fs.Adapter();
+
+        const uint32_t bytes_per_cluster = adapter.BytesPerCluster();
+        const uint32_t entries_per_cluster = bytes_per_cluster / 32;
+        const uint32_t max_clusters = 65536 / entries_per_cluster;          //  4096 with 512-byte clusters
+
+        //  Make SUBDIR3 (cluster 5) exactly 65,536 entries with no free slot.  Fill cluster 5 after
+        //      '.' and '..', then chain on max_clusters - 1 full clusters from the free run at 1000.
+
+        minstd::heap_buffer<uint8_t> buffer(__os_dynamic_heap_resource, bytes_per_cluster);
+
+        CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(5), buffer.data()));
+
+        for (uint32_t i = 2; i < entries_per_cluster; i++)
+        {
+            uint8_t *entry = buffer.data() + (i * 32);
+
+            memset(entry, 0, 32);
+            memcpy(entry, "FILLER  BIN", 11);
+            entry[11] = 0x20;
+        }
+
+        CHECK(adapter.WriteCluster(FAT32ClusterIndex(5), buffer.data()) == BlockIOResultCodes::SUCCESS);
+
+        //  The chained clusters are full of the same filler entry - overwrite '.' and '..'.
+
+        memcpy(buffer.data(), buffer.data() + (2 * 32), 32);
+        memcpy(buffer.data() + 32, buffer.data() + (2 * 32), 32);
+
+        uint32_t previous = 5;
+
+        for (uint32_t cluster = 1000; cluster < 1000 + max_clusters - 1; cluster++)
+        {
+            CHECK(adapter.WriteCluster(FAT32ClusterIndex(cluster), buffer.data()) == BlockIOResultCodes::SUCCESS);
+            CHECK_EQUAL(FilesystemResultCodes::SUCCESS, adapter.UpdateFATTableEntry(FAT32ClusterIndex(previous), FAT32ClusterIndex(cluster)));
+
+            previous = cluster;
+        }
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, adapter.UpdateFATTableEntry(FAT32ClusterIndex(previous), FAT32EntryAllocatedAndEndOfFile));
+
+        //  The directory is full and at the limit, so it cannot grow to take one more entry.
+
+        auto root = test_fs.RootDirectory();
+        auto subdir3 = root->GetDirectory(minstd::fixed_string<>("SUBDIR3"));
+
+        CHECK(subdir3.Successful());
+
+        auto file = (*subdir3)->OpenFile(minstd::fixed_string<>("NEWFILE.TXT"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK_EQUAL(FilesystemResultCodes::FAT32_UNABLE_TO_FIND_EMPTY_BLOCK_OF_DIRECTORY_ENTRIES, file.ResultCode());
+    }
 }

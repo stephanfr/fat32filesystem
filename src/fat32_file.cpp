@@ -328,16 +328,27 @@ namespace filesystems::fat32
 
             //  OK, we have filled the existing file storage so we need a new cluster to continue.
             //
-            //  Get the next empty cluster, then link the previous final cluster to the next cluster and then mark the new
-            //      cluster as the last cluster in the file.
+            //  Get the next empty cluster and claim it as the new end of the file, then link the previous final
+            //      cluster to it.  Claiming first means the chain never points at a free cluster.
 
             auto next_empty_cluster = block_io_adapter.FindNextEmptyCluster(current_cluster_ + 1);
 
             ReturnOnFailure(next_empty_cluster);
 
-            ReturnOnCallFailure(block_io_adapter.UpdateFATTableEntry(current_cluster_, *next_empty_cluster));
             ReturnOnCallFailure(block_io_adapter.UpdateFATTableEntry(*next_empty_cluster, FAT32EntryAllocatedAndEndOfFile));
 
+            const FilesystemResultCodes link_result = block_io_adapter.UpdateFATTableEntry(current_cluster_, *next_empty_cluster);
+
+            if (link_result != FilesystemResultCodes::SUCCESS)
+            {
+                //  Release the unlinked cluster.  The rollback is best effort: the caller needs the
+                //      original failure, not the rollback's.
+
+                block_io_adapter.UpdateFATTableEntry(*next_empty_cluster, FAT32EntryFree);
+
+                return link_result;
+            }
+            
             //  Move to the next cluster and reset the offset into the cluster to zero.
 
             current_cluster_ = *next_empty_cluster;

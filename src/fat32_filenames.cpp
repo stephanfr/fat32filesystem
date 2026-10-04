@@ -203,7 +203,7 @@ namespace filesystems::fat32
 
         for (uint32_t i = 0; i < name_.size(); i++)
         {
-            if (islower(name_[i]) || (FAT32ShortFilename::FORBIDDEN_8_3_FILENAME_CHARACTERS.find(name_[i]) != minstd::string::npos))
+            if (islower(static_cast<unsigned char>(name_[i])) || (FAT32ShortFilename::FORBIDDEN_8_3_FILENAME_CHARACTERS.find(name_[i]) != minstd::string::npos))
             {
                 return false;
             }
@@ -212,6 +212,13 @@ namespace filesystems::fat32
         //  Look for a period
 
         size_t extension_location = name_.find_last_of('.');
+
+        //  A name that starts with a period has an empty base, which no short name may have.
+
+        if (extension_location == 0)
+        {
+            return false;
+        }
 
         //  We know there are no illegal characters, the name is 8.3 if there are less than 8 characters in the name
 
@@ -268,7 +275,18 @@ namespace filesystems::fat32
         //  Find the start of the extension
 
         size_t extension_location = name_.find_last_of('.');
+        size_t first_non_period = 0;
 
+        while ((first_non_period < name_.size()) && (name_[first_non_period] == '.'))
+        {
+            first_non_period++;
+        }
+
+        if ((extension_location != minstd::string::npos) && (extension_location < first_non_period))
+        {
+            extension_location = minstd::string::npos;
+        }
+        
         //  Convert the long filename to uppercase
 
         for (uint32_t i = 0; i < minstd::min(name_.size(), extension_location) && short_filename.name_.size() < 8; i++)

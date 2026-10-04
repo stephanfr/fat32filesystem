@@ -7,7 +7,7 @@
 namespace filesystems
 {
 
-    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 42);
+    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 43);
 
     const char *ErrorMessage(FilesystemResultCodes code)
     {
@@ -138,6 +138,9 @@ namespace filesystems
 
         case FilesystemResultCodes::FAT32_CLUSTER_NOT_PRESENT_IN_CHAIN:
             return "FAT32: Cluster not present in chain";
+
+        case FilesystemResultCodes::FAT32_CLUSTER_CHAIN_IS_CORRUPT:
+            return "FAT32: Cluster chain is corrupt";
 
         default:
             return "Missing message";

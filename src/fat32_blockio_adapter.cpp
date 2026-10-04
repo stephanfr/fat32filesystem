@@ -243,6 +243,26 @@ namespace filesystems::fat32
         LogDebug1("First LBA, FAT LBA, Data LBA, Logical Sectors per FAT32, Logical Sectors per Cluster: %u, %u, %u, %u, %u\n", first_lba_sector, fat_lba, data_lba, bpb.logical_sectors_per_fat32_, bpb.logical_sectors_per_cluster_);
         LogDebug1("Root Directory Cluster: %u\n", bpb.root_directory_cluster_);
 
+        //  BPB_ExtFlags: bit 7 set means mirroring is off and only the FAT numbered in bits 0-3 is
+        //      active.  With mirroring on, FAT 0 is read and every FAT is written.
+
+        const bool mirror_fats = (bpb.flags_ & 0x0080) == 0;
+        const uint32_t active_fat = mirror_fats ? 0 : (bpb.flags_ & 0x000F);
+
+        if (active_fat >= bpb.number_of_fats_)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t active_fat_offset = 0;
+        uint32_t active_fat_lba = 0;
+
+        if (!CheckedMulU32(active_fat, bpb.logical_sectors_per_fat32_, active_fat_offset) ||
+            !CheckedAddU32(fat_lba, active_fat_offset, active_fat_lba))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
         uint32_t fsinfo_sector = 0;
 
         if ((bpb.location_of_filesystem_information_sector_ != 0) &&
@@ -260,10 +280,11 @@ namespace filesystems::fat32
                                                    bpb.logical_sectors_per_fat32_,
                                                    bpb.number_of_fats_,
                                                    first_lba_sector,
-                                                   fat_lba,
+                                                   active_fat_lba,
                                                    data_lba,
                                                    maximum_cluster_number,
-                                                   fsinfo_sector));
+                                                   fsinfo_sector,
+                                                   mirror_fats));
     }
 
     ValueResult<FilesystemResultCodes, FAT32ClusterIndex> FAT32BlockIOAdapter::NextClusterInChain(FAT32ClusterIndex cluster) const
@@ -332,10 +353,19 @@ namespace filesystems::fat32
 
         bool at_eof = false;
 
+        //  A legal chain visits each data cluster at most once; more steps than that is a cycle.
+
+        uint32_t steps = 0;
+
         do
         {
-            auto next_cluster = NextClusterInChain(current_cluster);
+            if (++steps > static_cast<uint32_t>(MaximumClusterNumber()))
+            {
+                return Result::Failure(FilesystemResultCodes::FAT32_CLUSTER_CHAIN_IS_CORRUPT);
+            }
 
+            auto next_cluster = NextClusterInChain(current_cluster);
+            
             ReturnOnFailure(next_cluster);
 
             if (next_cluster.Value() == cluster)
@@ -399,9 +429,11 @@ namespace filesystems::fat32
             return FilesystemResultCodes::FAT32_UNABLE_TO_WRITE_FAT_TABLE_SECTOR;
         }
 
-        //  Mirror the update into every remaining FAT.
+        //  Mirror the update into every remaining FAT - unless BPB_ExtFlags turned mirroring off, in
+        //      which case only the active FAT is maintained.  With mirroring on, FAT 0 is the active
+        //      FAT, so the remaining FATs are 1 .. number_of_fats_ - 1.
 
-        for (uint32_t fat_index = 1; fat_index < number_of_fats_; fat_index++)
+        for (uint32_t fat_index = 1; mirror_fats_ && (fat_index < number_of_fats_); fat_index++)
         {
             uint32_t fat_offset = 0;
             uint32_t mirror_sector = 0;

@@ -132,4 +132,21 @@ namespace
         CHECK(!FAT32LongFilename("FILENAM.TEXT").Is8Dot3Filename(short_filename));
         CHECK(short_filename.IsEmpty());
     }
+
+    TEST(FAT32LongFilename, NamesOfOnlySpacesOrPeriodsStripToEmpty)
+    {
+        FilesystemResultCodes result;
+
+        CHECK_EQUAL(0, FAT32LongFilename("...").length());
+        CHECK_EQUAL(0, FAT32LongFilename("   ").length());
+        CHECK_EQUAL(0, FAT32LongFilename(" . . ").length());
+
+        CHECK(!FAT32LongFilename("...").IsValid(result));
+        CHECK_EQUAL(FilesystemResultCodes::EMPTY_FILENAME, result);
+
+        //  A byte above 0x7F is not printable in the C locale, so it is forbidden.
+
+        CHECK(!FAT32LongFilename("caf\xE9.txt").IsValid(result));
+        CHECK_EQUAL(FilesystemResultCodes::FILENAME_CONTAINS_FORBIDDEN_CHARACTERS, result);
+    }
 }

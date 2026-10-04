@@ -101,4 +101,34 @@ namespace
         CHECK_EQUAL(0xE9, bytes[1]);
         CHECK_EQUAL(0x00, bytes[2]);
     }
+
+    TEST(FAT32DirectoryClusterEntry, StoredLeading05ReadsBackAsE5)
+    {
+        //  As stored on disk: byte 0 is 0x05, standing for a real 0xE5.
+
+        FAT32DirectoryClusterEntry entry("\x05" "ABC    ",
+                                         "TXT",
+                                         FAT32DirectoryEntryAttributeFlags::FAT32DirectoryEntryAttributeFile,
+                                         0,
+                                         FAT32TimeHundredths(0),
+                                         FAT32Time(0, 0, 0),
+                                         FAT32Date(1980, 1, 1),
+                                         FAT32Date(1980, 1, 1),
+                                         FAT32ClusterIndex(2),
+                                         FAT32Time(0, 0, 0),
+                                         FAT32Date(1980, 1, 1),
+                                         0);
+
+        CHECK(entry.IsInUse());
+
+        minstd::fixed_string<32> compact_filename;
+        entry.Compact8Dot3Filename(compact_filename);
+
+        STRCMP_EQUAL("\xE5" "ABC.TXT", compact_filename.c_str());
+
+        FAT32ShortFilename short_filename;
+        entry.AsShortFilename(short_filename);
+
+        STRCMP_EQUAL("\xE5" "ABC", short_filename.Name().c_str());
+    }
 }

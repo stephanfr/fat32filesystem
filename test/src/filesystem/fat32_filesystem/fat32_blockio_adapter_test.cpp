@@ -37,6 +37,7 @@ namespace
     constexpr uint32_t BPB_LOGICAL_SECTORS_PER_FAT16_OFFSET = 22;
     constexpr uint32_t BPB_TOTAL_LOGICAL_SECTORS_32_OFFSET = 32;
     constexpr uint32_t BPB_LOGICAL_SECTORS_PER_FAT32_OFFSET = 36;
+    constexpr uint32_t BPB_EXT_FLAGS_OFFSET = 40;
     constexpr uint32_t BPB_FS_VERSION_OFFSET = 42;
     constexpr uint32_t BPB_ROOT_DIRECTORY_CLUSTER_OFFSET = 44;
 
@@ -939,5 +940,73 @@ namespace
 
         CHECK_EQUAL(0xFFFFFFFFU, ReadU32LE(fsinfo, 488));       //  FSI_Free_Count: unknown
         CHECK_EQUAL(0xFFFFFFFFU, ReadU32LE(fsinfo, 492));       //  FSI_Nxt_Free: no hint
+    }
+
+    TEST(FAT32BlockIOAdapterTest, PreviousClusterInChainDetectsACycle)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        FAT32BlockIOAdapter &adapter = test_fat32->BlockIOAdapter();
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, adapter.UpdateFATTableEntry(FAT32ClusterIndex(40), FAT32ClusterIndex(41)));
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, adapter.UpdateFATTableEntry(FAT32ClusterIndex(41), FAT32ClusterIndex(40)));
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_CLUSTER_CHAIN_IS_CORRUPT,
+                               adapter.PreviousClusterInChain(FAT32ClusterIndex(40), FAT32ClusterIndex(50)));
+    }
+
+        TEST(FAT32BlockIOAdapterTest, ActiveFATIsUsedWhenMirroringIsOff)
+    {
+        uint8_t sector[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        //  BPB_ExtFlags = 0x0081: mirroring off, FAT #1 (the second FAT) active.
+
+        CHECK(test_device->ReadFromBlock(sector, FirstPartitionSector(), 1).Successful());
+        WriteU16LE(sector, BPB_EXT_FLAGS_OFFSET, 0x0081);
+        CHECK(test_device->WriteBlock(sector, FirstPartitionSector(), 1).Successful());
+
+        //  The test image has 32 reserved sectors and FATs of 536 sectors.  Chain 60 -> 61 in the
+        //      second FAT only.
+
+        const uint32_t first_fat_sector = FirstPartitionSector() + 32;
+        const uint32_t second_fat_sector = first_fat_sector + 536;
+
+        CHECK(test_device->ReadFromBlock(sector, second_fat_sector, 1).Successful());
+        WriteU32LE(sector, 60 * 4, 61);
+        CHECK(test_device->WriteBlock(sector, second_fat_sector, 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        FAT32BlockIOAdapter &adapter = test_fat32->BlockIOAdapter();
+
+        //  Reads come from the active FAT...
+
+        CHECK_SUCCESSFUL_AND_EQUAL(61U, adapter.NextClusterInChain(FAT32ClusterIndex(60)));
+
+        //  ...and writes go only to it: the inactive first FAT is left alone.
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, adapter.UpdateFATTableEntry(FAT32ClusterIndex(70), FAT32EntryAllocatedAndEndOfFile));
+
+        CHECK(test_device->ReadFromBlock(sector, first_fat_sector, 1).Successful());
+        CHECK_EQUAL(0U, ReadU32LE(sector, 70 * 4));
+    }
+
+    TEST(FAT32BlockIOAdapterTest, MountRejectsAnActiveFATThatDoesNotExist)
+    {
+        uint8_t sector[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        //  Mirroring off, FAT #2 active - but the volume only has FATs #0 and #1.
+
+        CHECK(test_device->ReadFromBlock(sector, FirstPartitionSector(), 1).Successful());
+        WriteU16LE(sector, BPB_EXT_FLAGS_OFFSET, 0x0082);
+        CHECK(test_device->WriteBlock(sector, FirstPartitionSector(), 1).Successful());
+
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM, test_fat32);
     }
 }

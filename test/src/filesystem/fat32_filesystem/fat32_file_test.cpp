@@ -244,4 +244,60 @@ namespace
         CHECK_EQUAL(0xEE, contents.data()[992]);
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*reader)->Close());
     }
+
+    TEST(FAT32FileTest, FailedChainGrowthNeverLinksAFreeCluster)
+    {
+        FAT32BlockIOAdapter &adapter = test_fs.Adapter();
+
+        const uint32_t bytes_per_cluster = adapter.BytesPerCluster();
+
+        //  An empty file's first cluster is the one the allocator hands out next.
+
+        auto first_cluster = adapter.FindNextEmptyCluster();
+
+        CHECK(first_cluster.Successful());
+
+        auto root = test_fs.RootDirectory();
+
+        auto file = root->OpenFile(minstd::fixed_string<>("grow.dat"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK(file.Successful());
+
+        //  Fill exactly one cluster.  This is also the first FAT change since mount, so FSInfo is
+        //      invalidated here and adds no write below.
+
+        minstd::heap_buffer<uint8_t> full_cluster(__os_dynamic_heap_resource, bytes_per_cluster);
+
+        FillBuffer(full_cluster, 0xAA, bytes_per_cluster);
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Write(full_cluster));
+        CHECK(*adapter.NextClusterInChain(*first_cluster) >= FAT32EntryEOFThreshold);
+
+        //  Growing by one byte writes: #1 the current cluster, then two FAT updates of two writes
+        //      each (primary FAT, then mirror).  Fail write #4 - the second update's primary write.
+
+        test_fs.Device().SimulateWriteError(3);
+
+        minstd::heap_buffer<uint8_t> one_byte(__os_dynamic_heap_resource, 1);
+
+        FillBuffer(one_byte, 0xBB, 1);
+
+        CHECK_EQUAL(FilesystemResultCodes::FAT32_UNABLE_TO_WRITE_FAT_TABLE_SECTOR, (*file)->Write(one_byte));
+
+        //  Whatever the first cluster now points to must be allocated - never free.
+
+        auto next = adapter.NextClusterInChain(*first_cluster);
+
+        CHECK(next.Successful());
+
+        if (*next < FAT32EntryEOFThreshold)
+        {
+            auto after = adapter.NextClusterInChain(*next);
+
+            CHECK(after.Successful());
+            CHECK(*after != FAT32EntryFree);
+        }
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+    }
 }
