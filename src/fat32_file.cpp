@@ -418,10 +418,6 @@ namespace filesystems::fat32
 
     FilesystemResultCodes FAT32File::Close()
     {
-        //  RemoveFile() erases the unique_ptr that owns this object, so *this is destroyed the
-        //      moment it returns.  Log first, and touch no member - and no RAII guard that
-        //      might - afterwards.
-
         LogDebug1("Closing file: %s\n", path_.c_str());
 
         auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);

@@ -77,7 +77,7 @@ namespace filesystems::fat32
         LogEntryAndExit("Entering with path: %s\n", path.c_str());
 
         //  Lock the filesystem to ensure thread safety
-        
+
         minstd::lock_guard guard(lock_);
 
         //  Parse the path, return immediately if it is not parseable

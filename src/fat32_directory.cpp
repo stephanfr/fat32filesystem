@@ -769,8 +769,7 @@ namespace filesystems::fat32
 
         ReturnOnFailure(directory_entry);
 
-        //  An open file is tracked in FileMap by its path.  Renaming it under its handles would
-        //      orphan that key.
+        //  Can't rename a file that is currently open exclusively by someone else
 
         if ((entry_type == FilesystemDirectoryEntryType::FILE) &&
             GetFileMap().IsFileOpen(FAT32OpenFileIdentity(FilesystemUUID(), GetOpaqueData(*directory_entry).directory_entry_address_)))

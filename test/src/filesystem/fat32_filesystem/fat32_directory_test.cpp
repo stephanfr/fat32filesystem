@@ -702,7 +702,7 @@ namespace
         CHECK_EQUAL(FilesystemResultCodes::FAT32_UNABLE_TO_FIND_EMPTY_BLOCK_OF_DIRECTORY_ENTRIES, file.ResultCode());
     }
 
-        TEST(FAT32DirectoryTest, VisitDirectoryHoldsTheFilesystemLockAndAllowsReentry)
+    TEST(FAT32DirectoryTest, VisitDirectoryHoldsTheFilesystemLockAndAllowsReentry)
     {
         auto root = test_fs.RootDirectory();
 
