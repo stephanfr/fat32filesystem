@@ -207,6 +207,21 @@ namespace filesystems::fat32
             return FilesystemResultCodes::FILE_NOT_OPENED_FOR_WRITE;
         }
 
+        //  Nothing to write: in particular, do not give an empty file a cluster - a 0-byte file
+        //      must have first cluster 0.
+
+        if (buffer.size() == 0)
+        {
+            return FilesystemResultCodes::SUCCESS;
+        }
+
+        //  An append-mode handle always writes at the end of the file.
+
+        if (HasFileMode(mode_, FileModes::APPEND))
+        {
+            ReturnOnCallFailure(SeekEnd());
+        }
+
         //  Get the filesystem entity
 
         auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(filesystem_uuid_);

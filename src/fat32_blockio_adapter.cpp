@@ -243,6 +243,14 @@ namespace filesystems::fat32
         LogDebug1("First LBA, FAT LBA, Data LBA, Logical Sectors per FAT32, Logical Sectors per Cluster: %u, %u, %u, %u, %u\n", first_lba_sector, fat_lba, data_lba, bpb.logical_sectors_per_fat32_, bpb.logical_sectors_per_cluster_);
         LogDebug1("Root Directory Cluster: %u\n", bpb.root_directory_cluster_);
 
+        uint32_t fsinfo_sector = 0;
+
+        if ((bpb.location_of_filesystem_information_sector_ != 0) &&
+            (bpb.location_of_filesystem_information_sector_ < bpb.reserved_logical_sectors_))
+        {
+            fsinfo_sector = first_lba_sector + bpb.location_of_filesystem_information_sector_;
+        }
+
         //  Return success
 
         return Result::Success(FAT32BlockIOAdapter(io_device,
@@ -254,7 +262,8 @@ namespace filesystems::fat32
                                                    first_lba_sector,
                                                    fat_lba,
                                                    data_lba,
-                                                   maximum_cluster_number));
+                                                   maximum_cluster_number,
+                                                   fsinfo_sector));
     }
 
     ValueResult<FilesystemResultCodes, FAT32ClusterIndex> FAT32BlockIOAdapter::NextClusterInChain(FAT32ClusterIndex cluster) const
@@ -345,6 +354,8 @@ namespace filesystems::fat32
 
     FilesystemResultCodes FAT32BlockIOAdapter::UpdateFATTableEntry(FAT32ClusterIndex cluster, FAT32ClusterIndex new_value)
     {
+        using Result = FilesystemResultCodes;
+
         LogEntryAndExit("Updating FAT Table entry: %d with new value: %d\n", static_cast<uint32_t>(cluster), static_cast<uint32_t>(new_value));
 
         //  Insure we stay in the bounds of the FAT table.  We do have to be able to write a zero (FAT32EntryFree) to the FAT table though.
@@ -353,6 +364,11 @@ namespace filesystems::fat32
         {
             return FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE;
         }
+
+        //  The first FAT change since mount makes FSInfo's free count and next-free hint stale,
+        //      mark them unknown before changing anything.
+
+        ReturnOnCallFailure(InvalidateFSInfoOnce());
 
         // Calculate the sector LBA from the FAT table base address
 
@@ -408,6 +424,42 @@ namespace filesystems::fat32
         return FilesystemResultCodes::SUCCESS;
     }
 
+    FilesystemResultCodes FAT32BlockIOAdapter::InvalidateFSInfoOnce()
+    {
+        if (fsinfo_invalidated_ || (fsinfo_sector_ == 0))
+        {
+            return FilesystemResultCodes::SUCCESS;
+        }
+
+        uint32_t sector[(io_device_->BlockSize() / sizeof(uint32_t)) + 2];
+
+        if (io_device_->ReadFromBlock((uint8_t *)sector, fsinfo_sector_, 1).Failed())
+        {
+            LogDebug1("Unable to read FSInfo sector: %u\n", fsinfo_sector_);
+            return FilesystemResultCodes::FAT32_DEVICE_READ_ERROR;
+        }
+
+        //  Only touch a sector that really is FSInfo: lead, struct and trail signatures.
+
+        if ((sector[0] == 0x41615252) && (sector[121] == 0x61417272) && (sector[127] == 0xAA550000))
+        {
+            sector[122] = 0xFFFFFFFF;       //  FSI_Free_Count: unknown
+            sector[123] = 0xFFFFFFFF;       //  FSI_Nxt_Free: no hint
+
+            if (io_device_->WriteBlock((uint8_t *)sector, fsinfo_sector_, 1).Failed())
+            {
+                LogDebug1("Unable to write FSInfo sector: %u\n", fsinfo_sector_);
+                return FilesystemResultCodes::FAT32_DEVICE_WRITE_ERROR;
+            }
+        }
+
+        //  Done for this mount - whether we updated it or found no valid FSInfo to update.
+
+        fsinfo_invalidated_ = true;
+
+        return FilesystemResultCodes::SUCCESS;
+    }
+
     ValueResult<FilesystemResultCodes, FAT32ClusterIndex> FAT32BlockIOAdapter::FindNextEmptyCluster(FAT32ClusterIndex starting_cluster) const
     {
         using Result = ValueResult<FilesystemResultCodes, FAT32ClusterIndex>;
@@ -419,6 +471,10 @@ namespace filesystems::fat32
         if (starting_cluster == 0)
         {
             starting_cluster = last_empty_cluster_found_ > root_directory_cluster_ ? last_empty_cluster_found_ : root_directory_cluster_;
+        }
+        else if (starting_cluster > MaximumClusterNumber())
+        {
+            starting_cluster = FAT32ClusterIndex(2);
         }
 
         //  Do not try to read past the end of the FAT table

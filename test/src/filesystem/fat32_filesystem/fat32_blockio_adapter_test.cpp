@@ -673,11 +673,10 @@ namespace
 
         CHECK(test_fat32.Successful());
 
-        //  Check that we cannot read out of range indices
+        //  Cluster 1 is reserved and is never a valid hint (0 means "no hint").  A hint past the
+        //      end is not an error: it wraps, see FindNextEmptyClusterWrapsAHintPastTheEnd.
 
-        FAT32ClusterIndex bad_ci = FAT32ClusterIndex((uint32_t)test_fat32->BlockIOAdapter().MaximumClusterNumber() + 1);
-
-        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE, test_fat32->BlockIOAdapter().FindNextEmptyCluster(FAT32ClusterIndex(bad_ci)).ResultCode());
+        CHECK_FAILED_WITH_CODE(FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE, test_fat32->BlockIOAdapter().FindNextEmptyCluster(FAT32ClusterIndex(1)).ResultCode());
     }
 
     TEST(FAT32BlockIOAdapterTest, ReleaseChainTest)
@@ -912,5 +911,33 @@ namespace
         //  ...but they remain legal values to write.
 
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, adapter.UpdateFATTableEntry(FAT32ClusterIndex(40), FAT32EntryAllocatedAndEndOfFile));
+    }
+
+    TEST(FAT32BlockIOAdapterTest, FindNextEmptyClusterWrapsAHintPastTheEnd)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        FAT32BlockIOAdapter &adapter = test_fat32->BlockIOAdapter();
+
+        CHECK(adapter.FindNextEmptyCluster(FAT32ClusterIndex((uint32_t)adapter.MaximumClusterNumber() + 1)).Successful());
+    }
+
+    TEST(FAT32BlockIOAdapterTest, FirstFATUpdateInvalidatesFSInfoHints)
+    {
+        auto test_fat32 = FAT32Filesystem::Mount(false, "test_fat32", "TESTFAT32", false, *test_device, partitions[0]);
+
+        CHECK(test_fat32.Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS,
+                    test_fat32->BlockIOAdapter().UpdateFATTableEntry(FAT32ClusterIndex(40), FAT32EntryAllocatedAndEndOfFile));
+
+        uint8_t fsinfo[ut_utility::InMemoryFileBlockIODevice::BLOCK_SIZE_IN_BYTES];
+
+        CHECK(test_device->ReadFromBlock(fsinfo, FirstPartitionSector() + 1, 1).Successful());
+
+        CHECK_EQUAL(0xFFFFFFFFU, ReadU32LE(fsinfo, 488));       //  FSI_Free_Count: unknown
+        CHECK_EQUAL(0xFFFFFFFFU, ReadU32LE(fsinfo, 492));       //  FSI_Nxt_Free: no hint
     }
 }

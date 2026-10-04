@@ -117,6 +117,8 @@ namespace filesystems::fat32
 
     PointerResult<FilesystemResultCodes, FilesystemDirectory> FAT32Directory::GetDotDotEntry(FAT32Filesystem &filesystem) const
     {
+        using Result = PointerResult<FilesystemResultCodes, FilesystemDirectory>;
+
         //  There is no dot dot entry for the root directory
 
         if (IsRoot())
@@ -124,9 +126,33 @@ namespace filesystems::fat32
             return GetDotEntry();
         }
 
-        //  Get the dot dot entry, which is the parent directory.
+        //  Get the parent path from the current absolute path.
 
         minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> parent_path;
+
+        size_t last_slash = path_.find_last_of('/');
+
+        if (last_slash != minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>::npos)
+        {
+            if (last_slash != 0)
+            {
+                path_.substr(parent_path, 0, last_slash);
+            }
+            else
+            {
+                parent_path = "/";
+            }
+        }
+        else
+        {
+            //  We should never get here.
+
+            return Result::Failure(FilesystemResultCodes::ILLEGAL_PATH);
+        }
+
+        //  The parent's own directory entry lives in the grandparent.  Resolve it by path: the
+        //      '..' slot in this directory is not that entry, and RemoveDirectory() on a handle
+        //      carrying its address deletes the wrong slot.
 
         return filesystem.GetDirectory(parent_path);
     }

@@ -83,7 +83,9 @@ namespace filesystems::fat32
               data_lba_(adapter_to_copy.data_lba_),
               maximum_cluster_number_(adapter_to_copy.maximum_cluster_number_),
               fat32_entries_per_block_(adapter_to_copy.fat32_entries_per_block_),
-              last_empty_cluster_found_(adapter_to_copy.last_empty_cluster_found_)
+              last_empty_cluster_found_(adapter_to_copy.last_empty_cluster_found_),
+              fsinfo_sector_(adapter_to_copy.fsinfo_sector_),
+              fsinfo_invalidated_(adapter_to_copy.fsinfo_invalidated_)
         {
         }
 
@@ -275,6 +277,10 @@ namespace filesystems::fat32
 
         mutable FAT32ClusterIndex last_empty_cluster_found_;
 
+        const uint32_t fsinfo_sector_;
+        bool fsinfo_invalidated_ = false;
+
+
         //
         //  Private methods
         //
@@ -303,7 +309,8 @@ namespace filesystems::fat32
                             uint32_t first_lba_sector,
                             uint32_t fat_lba,
                             uint32_t data_lba,
-                            uint32_t maximum_cluster_number)
+                            uint32_t maximum_cluster_number,
+                            uint32_t fsinfo_sector)
             : io_device_(&io_device),
               root_directory_cluster_(root_directory_cluster),
               logical_sectors_per_cluster_(logical_sectors_per_cluster),
@@ -315,7 +322,8 @@ namespace filesystems::fat32
               data_lba_(data_lba),
               maximum_cluster_number_(maximum_cluster_number),
               fat32_entries_per_block_(io_device_->BlockSize() / sizeof(uint32_t)),
-              last_empty_cluster_found_(0)
+              last_empty_cluster_found_(0),
+              fsinfo_sector_(fsinfo_sector)
         {
         }
 
@@ -360,5 +368,13 @@ namespace filesystems::fat32
          * @return        The result code indicating the success or failure of the operation.
          */
         FilesystemResultCodes ReadFATBlock(FAT32ClusterIndex cluster, uint32_t *buffer) const;
+
+        /**
+         * Before the first FAT change since mount, marks FSInfo's free-cluster count and
+         * next-free hint as unknown (0xFFFFFFFF), as the specification allows, so other systems
+         * recompute them rather than trust stale values.  Does nothing on later calls, or if the
+         * volume has no FSInfo sector.
+         */
+        FilesystemResultCodes InvalidateFSInfoOnce();
     };
 } // namespace filesystems::fat32

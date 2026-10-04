@@ -375,7 +375,7 @@ namespace filesystems::fat32
          */
         bool IsVolumeInformationEntry() const noexcept
         {
-            return (IsInUse() && (attributes_ & FAT32DirectoryEntryAttributeVolumeId));
+            return (IsStandardEntry() && ((attributes_ & (FAT32DirectoryEntryAttributeDirectory | FAT32DirectoryEntryAttributeVolumeId)) == FAT32DirectoryEntryAttributeVolumeId));
         }
 
         /**
@@ -385,7 +385,7 @@ namespace filesystems::fat32
          */
         bool IsDirectoryEntry() const noexcept
         {
-            return (IsInUse() && (attributes_ & FAT32DirectoryEntryAttributeDirectory));
+            return (IsStandardEntry() && ((attributes_ & (FAT32DirectoryEntryAttributeDirectory | FAT32DirectoryEntryAttributeVolumeId)) == FAT32DirectoryEntryAttributeDirectory));
         }
 
         /**
@@ -395,8 +395,7 @@ namespace filesystems::fat32
          */
         bool IsFileEntry() const noexcept
         {
-            return (IsInUse() &&
-                    !(attributes_ & (FAT32DirectoryEntryAttributeDirectory | FAT32DirectoryEntryAttributeVolumeId | FAT32DirectoryEntryAttributeSystem)));
+            return (IsStandardEntry() && ((attributes_ & (FAT32DirectoryEntryAttributeDirectory | FAT32DirectoryEntryAttributeVolumeId)) == 0));
         }
 
         /**

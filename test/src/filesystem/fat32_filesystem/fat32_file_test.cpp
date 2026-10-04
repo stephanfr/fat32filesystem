@@ -189,4 +189,59 @@ namespace
 
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
     }
+
+    TEST(FAT32FileTest, EmptyWriteDoesNotAllocate)
+    {
+        auto root = test_fs.RootDirectory();
+
+        const auto before = test_fs.Adapter().FindNextEmptyCluster(FAT32ClusterIndex(40));
+
+        CHECK(before.Successful());
+
+        auto file = root->OpenFile(minstd::fixed_string<>("empty.dat"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK(file.Successful());
+
+        minstd::heap_buffer<uint8_t> nothing(__os_dynamic_heap_resource, 16);       //  capacity 16, size 0
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Write(nothing));
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+
+        //  The cluster that was free before is still free.
+
+        CHECK_SUCCESSFUL_AND_EQUAL((uint32_t)*before, test_fs.Adapter().FindNextEmptyCluster(FAT32ClusterIndex(40)));
+    }
+
+    TEST(FAT32FileTest, WriteOnAnAppendHandleAppends)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        minstd::fixed_string<MAX_FILENAME_LENGTH> name("Lorem ipsum dolor sit amet.text");
+
+        auto appender = (*subdir)->OpenFile(name, FileModes::APPEND);
+
+        CHECK(appender.Successful());
+
+        minstd::heap_buffer<uint8_t> payload(__os_dynamic_heap_resource, 16);
+
+        FillBuffer(payload, 0xEE, 16);
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*appender)->Write(payload));
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*appender)->Close());
+
+        auto reader = (*subdir)->OpenFile(name, FileModes::READ);
+
+        CHECK(reader.Successful());
+
+        minstd::heap_buffer<uint8_t> contents(__os_dynamic_heap_resource, 2048);
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*reader)->Read(contents));
+        CHECK_EQUAL(992 + 16, contents.size());
+        CHECK_EQUAL('L', contents.data()[0]);
+        CHECK_EQUAL(0xEE, contents.data()[992]);
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*reader)->Close());
+    }
 }

@@ -513,4 +513,25 @@ namespace
 
         CHECK_FALSE(root->GetDirectory(minstd::fixed_string<>("PARENT")).Successful());
     }
+
+    TEST(FAT32DirectoryTest, SystemAttributeFilesAreOrdinaryFiles)
+    {
+        //  Give Lorem (SUBDIR1 cluster 3 idx 14) ARCHIVE|SYSTEM.
+
+        minstd::heap_buffer<uint8_t> buffer(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(3), buffer.data()));
+        buffer.data()[(14 * 32) + 11] = 0x24;
+        CHECK(test_fs.Adapter().WriteCluster(FAT32ClusterIndex(3), buffer.data()) == BlockIOResultCodes::SUCCESS);
+
+        auto root = test_fs.RootDirectory();
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        auto file = (*subdir)->OpenFile(minstd::fixed_string<MAX_FILENAME_LENGTH>("Lorem ipsum dolor sit amet.text"), FileModes::READ);
+
+        CHECK(file.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+    }
 }
