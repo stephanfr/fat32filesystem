@@ -14,25 +14,17 @@
 #undef EOF
 #include <stdio.h>
 
-//  Stub out some of the synchronization functions
 
-UUID GetCurrentTaskId(void)
+//  The tests run as one task, owner 1.  A test may briefly pose as another task.
+
+uintptr_t g_test_task_owner_id = 1;
+
+uintptr_t GetCurrentTaskOwnerId() noexcept
 {
-    return UUID::GenerateUUID(UUID::Versions::RANDOM);
+    return g_test_task_owner_id;
 }
 
-extern "C"
-{
-    void LockSpinLock(void *spinlock)
-    {
-    }
-
-    void UnlockSpinLock(void *spinlock)
-    {
-    }
-}
-
-//  To initialize SW RNGs
+//  Initialize SW RNGs
 
 extern void InitializeSWRandomNumberGenerators(MurmurHash64ASeed os_entity_hash_seed,
                                                minstd::xoroshiro128_plus_plus::seed_type xoroshiro_seed);

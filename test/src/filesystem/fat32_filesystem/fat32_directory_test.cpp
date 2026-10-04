@@ -5,6 +5,7 @@
 #include "../../cpputest_support.h"
 
 #include "../../utility/mounted_test_filesystem.h"
+#include "../../utility/test_task_owner.h"
 
 #include "filesystem/fat32_directory.h"
 #include "filesystem/fat32_filesystem.h"
@@ -148,7 +149,7 @@ namespace
         CHECK(memcmp(raw_cluster.data() + (2 * 32), "NEWDIR     ", 11) == 0);
         CHECK((uint32_t)newdir_cluster != (uint32_t)olddir_cluster);
 
-        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, (*stale)->RemoveDirectory());
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_HANDLE_IS_STALE, (*stale)->RemoveDirectory());
 
         CHECK(root->GetDirectory(minstd::fixed_string<>("NEWDIR")).Successful());
     }
@@ -282,10 +283,6 @@ namespace
         //      caller-supplied "/rootfile.txt".
 
         STRCMP_EQUAL("/rootfile.txt", path->c_str());
-
-        minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path("/rootfile.txt");
-
-        CHECK(GetFileMap().IsFileOpen(absolute_path));
 
         //  And the open file must be protected from deletion.
 
@@ -703,5 +700,189 @@ namespace
         auto file = (*subdir3)->OpenFile(minstd::fixed_string<>("NEWFILE.TXT"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
 
         CHECK_EQUAL(FilesystemResultCodes::FAT32_UNABLE_TO_FIND_EMPTY_BLOCK_OF_DIRECTORY_ENTRIES, file.ResultCode());
+    }
+
+        TEST(FAT32DirectoryTest, VisitDirectoryHoldsTheFilesystemLockAndAllowsReentry)
+    {
+        auto root = test_fs.RootDirectory();
+
+        uint32_t visited = 0;
+        bool lock_free_in_callback = true;
+        bool reentry_succeeded = false;
+
+        FilesystemResultCodes result = root->VisitDirectory([&](const FilesystemDirectoryEntry &) -> FilesystemDirectoryVisitorCallbackStatus
+                                                            {
+                                                                visited++;
+
+                                                                //  Another task must be shut out while the walk is in progress...
+
+                                                                lock_free_in_callback = LockIsFree(test_fs.Filesystem().FilesystemLock());
+
+                                                                //  ...but this task may re-enter the filesystem: the lock is recursive.
+
+                                                                reentry_succeeded = root->GetDirectory(minstd::fixed_string<>("SUBDIR1")).Successful();
+
+                                                                return FilesystemDirectoryVisitorCallbackStatus::FINISHED;
+                                                            });
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, result);
+        CHECK_EQUAL(1U, visited);
+#if FILESYSTEM_LOCKING
+        CHECK_FALSE(lock_free_in_callback);     //  compiled out, there is no lock to hold
+#endif
+        CHECK(reentry_succeeded);
+        CHECK(LockIsFree(test_fs.Filesystem().FilesystemLock()));
+    }
+
+    TEST(FAT32DirectoryTest, EveryOperationReleasesTheFilesystemLock)
+    {
+        FilesystemMutex &lock = test_fs.Filesystem().FilesystemLock();
+
+        auto root = test_fs.RootDirectory();
+
+        auto subdir3 = root->GetDirectory(minstd::fixed_string<>("SUBDIR3"));
+        CHECK(subdir3.Successful());
+        CHECK(LockIsFree(lock));
+
+        auto file = (*subdir3)->OpenFile(minstd::fixed_string<>("LOCKS.TXT"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+        CHECK(file.Successful());
+        CHECK(LockIsFree(lock));
+
+        minstd::heap_buffer<uint8_t> payload(__os_dynamic_heap_resource, 600);      //  crosses a cluster boundary
+
+        for (uint32_t i = 0; i < 600; i++)
+        {
+            uint8_t byte = 0x5A;
+
+            payload.append(&byte, 1);
+        }
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Write(payload));
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Append(payload));     //  nests: Append -> SeekEnd -> Seek, Write -> SeekEnd
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Seek(0));
+        CHECK(LockIsFree(lock));
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+        CHECK(LockIsFree(lock));
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*subdir3)->RenameFile(minstd::fixed_string<>("LOCKS.TXT"), minstd::fixed_string<>("LOCKS2.TXT")));
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*subdir3)->DeleteFile(minstd::fixed_string<>("LOCKS2.TXT")));
+        CHECK(LockIsFree(lock));
+
+        auto child = (*subdir3)->CreateDirectory(minstd::fixed_string<>("CHILD"));
+        CHECK(child.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*child)->RemoveDirectory());
+        CHECK(LockIsFree(lock));
+
+        CHECK(test_fs.Filesystem().GetDirectory(minstd::fixed_string<>("/SUBDIR1")).Successful());
+        CHECK(LockIsFree(lock));
+    }
+
+    TEST(FAT32DirectoryTest, FailedOperationsReleaseTheFilesystemLock)
+    {
+        FilesystemMutex &lock = test_fs.Filesystem().FilesystemLock();
+
+        auto root = test_fs.RootDirectory();
+
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, root->GetDirectory(minstd::fixed_string<>("NOSUCH")).ResultCode());
+        CHECK(LockIsFree(lock));
+
+        CHECK_FALSE(root->OpenFile(minstd::fixed_string<>("NOSUCH.TXT"), FileModes::READ).Successful());
+        CHECK(LockIsFree(lock));
+
+        CHECK_EQUAL(FilesystemResultCodes::FILE_NOT_FOUND, root->DeleteFile(minstd::fixed_string<>("NOSUCH.TXT")));
+        CHECK(LockIsFree(lock));
+
+        CHECK_FALSE(test_fs.Filesystem().GetDirectory(minstd::fixed_string<>("/NOSUCH")).Successful());
+        CHECK(LockIsFree(lock));
+    }
+
+    TEST(FAT32DirectoryTest, OpenFileStaysProtectedAfterItsDirectoryIsRenamed)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir1 = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir1.Successful());
+
+        minstd::fixed_string<MAX_FILENAME_LENGTH> name("Lorem ipsum dolor sit amet.text");
+
+        auto writer = (*subdir1)->OpenFile(name, FileModes::WRITE);
+
+        CHECK(writer.Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, root->RenameDirectory(minstd::fixed_string<>("SUBDIR1"), minstd::fixed_string<>("MOVED")));
+
+        auto moved = root->GetDirectory(minstd::fixed_string<>("MOVED"));
+
+        CHECK(moved.Successful());
+
+        //  Same file, new path: still open, still exclusive.
+
+        CHECK_EQUAL(FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY, (*moved)->DeleteFile(name));
+        CHECK_FALSE((*moved)->OpenFile(name, FileModes::WRITE).Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*writer)->Close());
+    }
+
+    TEST(FAT32DirectoryTest, DescendantCacheEntriesDoNotSurviveARename)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir1 = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir1.Successful());
+
+        //  Cache "/SUBDIR1/this is a long subdirectory name".
+
+        CHECK((*subdir1)->GetDirectory(minstd::fixed_string<MAX_FILENAME_LENGTH>("this is a long subdirectory name")).Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, root->RenameDirectory(minstd::fixed_string<>("SUBDIR1"), minstd::fixed_string<>("MOVED")));
+
+        CHECK_FALSE(test_fs.Filesystem().GetDirectory(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/SUBDIR1/this is a long subdirectory name")).Successful());
+        CHECK(test_fs.Filesystem().GetDirectory(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/MOVED/this is a long subdirectory name")).Successful());
+    }
+
+    TEST(FAT32DirectoryTest, HandleToARemovedDirectoryIsStale)
+    {
+        auto root = test_fs.RootDirectory();
+
+        auto doomed = root->CreateDirectory(minstd::fixed_string<>("DOOMED"));
+        CHECK(doomed.Successful());
+
+        auto second_handle = root->GetDirectory(minstd::fixed_string<>("DOOMED"));
+        CHECK(second_handle.Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*doomed)->RemoveDirectory());
+
+        //  DOOMED's cluster is free.  Creating a file through the old handle would write a directory
+        //      entry into it.
+
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_HANDLE_IS_STALE,
+                    (*second_handle)->OpenFile(minstd::fixed_string<>("X.TXT"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE)).ResultCode());
+    }
+
+    TEST(FAT32DirectoryTest, HandlesToARenamedDirectoryAndItsDescendantsAreStale)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir1 = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+        CHECK(subdir1.Successful());
+
+        auto child = (*subdir1)->GetDirectory(minstd::fixed_string<MAX_FILENAME_LENGTH>("this is a long subdirectory name"));
+        CHECK(child.Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, root->RenameDirectory(minstd::fixed_string<>("SUBDIR1"), minstd::fixed_string<>("MOVED")));
+
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_HANDLE_IS_STALE,
+                    (*subdir1)->OpenFile(minstd::fixed_string<>("NEW.TXT"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE)).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_HANDLE_IS_STALE,
+                    (*child)->GetDirectory(minstd::fixed_string<>(".")).ResultCode());
+
+        //  The root and fresh handles are fine.
+
+        auto moved = root->GetDirectory(minstd::fixed_string<>("MOVED"));
+        CHECK(moved.Successful());
+
+        auto file = (*moved)->OpenFile(minstd::fixed_string<>("NEW.TXT"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+        CHECK(file.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
     }
 }

@@ -24,16 +24,16 @@ namespace filesystems::fat32
 
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(filesystem_uuid_);
+        auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
         }
 
-        //  Get the block io adapter from the filesystem
+        FAT32Filesystem &filesystem = *locked_filesystem;
 
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        //  Get the block io adapter from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
@@ -118,16 +118,16 @@ namespace filesystems::fat32
 
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(filesystem_uuid_);
+        auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
         }
 
-        //  Get the block io adapter from the filesystem
+        FAT32Filesystem &filesystem = *locked_filesystem;
 
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        //  Get the block io adapter from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
@@ -215,6 +215,17 @@ namespace filesystems::fat32
             return FilesystemResultCodes::SUCCESS;
         }
 
+        //  Get the filesystem entity
+
+        auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);
+
+        if (!locked_filesystem)
+        {
+            return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
+        }
+
+        FAT32Filesystem &filesystem = *locked_filesystem;
+
         //  An append-mode handle always writes at the end of the file.
 
         if (HasFileMode(mode_, FileModes::APPEND))
@@ -222,18 +233,7 @@ namespace filesystems::fat32
             ReturnOnCallFailure(SeekEnd());
         }
 
-        //  Get the filesystem entity
-
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(filesystem_uuid_);
-
-        if (!get_filesystem_result.Successful())
-        {
-            return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
-        }
-
         //  Get the block io adapter from the filesystem
-
-        FAT32Filesystem &filesystem = get_filesystem_result;
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
@@ -355,21 +355,28 @@ namespace filesystems::fat32
             byte_offset_into_cluster_ = 0;
         }
 
-        //  Finally, update the directory entry.
-        //      We need to update the directory entry saved with the file and also the entry on the disk.
+        //  Finally, update the directory entry, in memory and on disk: the size if the file grew, and
+        //      ATTR_ARCHIVE the first time this handle modifies the file - even if the size is unchanged.
 
-        if (byte_offset_into_file_ > directory_entry_.Size())
+        const bool file_grew = byte_offset_into_file_ > directory_entry_.Size();
+
+        if (file_grew || !marked_archive_)
         {
-            directory_entry_.UpdateSize(byte_offset_into_file_);
+            if (file_grew)
+            {
+                directory_entry_.UpdateSize(byte_offset_into_file_);
+            }
 
-            auto update_directory_entry_result = FAT32Directory::UpdateDirectoryEntrySize(block_io_adapter, directory_entry_address_, byte_offset_into_file_);
+            auto update_directory_entry_result = FAT32Directory::UpdateDirectoryEntrySize(block_io_adapter, directory_entry_address_, directory_entry_.Size());
 
             if (update_directory_entry_result != FilesystemResultCodes::SUCCESS)
             {
-                LogDebug1("Failed to update directory entry after append\n");
+                LogDebug1("Failed to update directory entry after write\n");
 
                 return update_directory_entry_result;
             }
+
+            marked_archive_ = true;
         }
 
         //  Finished with success
@@ -387,6 +394,15 @@ namespace filesystems::fat32
         if (!HasFileMode(mode_, FileModes::WRITE) && !HasFileMode(mode_, FileModes::APPEND))
         {
             return FilesystemResultCodes::FILE_NOT_OPENED_FOR_WRITE;
+        }
+
+        //  Get a lock on the filesystem to ensure thread safety - Write will just get the same lock recursively.
+
+        auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);
+
+        if (!locked_filesystem)
+        {
+            return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
         }
 
         //  Move to the end of the file
@@ -407,6 +423,8 @@ namespace filesystems::fat32
         //      might - afterwards.
 
         LogDebug1("Closing file: %s\n", path_.c_str());
+
+        auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);
 
         const FilesystemResultCodes result = GetFileMap().RemoveFile(*this);
 

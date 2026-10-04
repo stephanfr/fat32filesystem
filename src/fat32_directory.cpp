@@ -22,16 +22,15 @@ namespace filesystems::fat32
 
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(FilesystemUUID());
+        auto locked_filesystem = FAT32Filesystem::Lock(FilesystemUUID());
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
         }
 
-        //  Get the block io adapter from the filesystem
-
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        FAT32Filesystem &filesystem = *locked_filesystem;
+        ReturnOnCallFailure(ValidateHandle(filesystem));
 
         //  Create a directory cluster object
 
@@ -104,6 +103,44 @@ namespace filesystems::fat32
         return Result::Failure(FilesystemResultCodes::FILE_NOT_FOUND);
     }
 
+    FilesystemResultCodes FAT32Directory::ValidateHandle(FAT32Filesystem &filesystem) const
+    {
+        //  Nothing that could move or remove a directory has happened since this handle was last checked.
+
+        if (validated_at_generation_ == filesystem.DirectoryGeneration())
+        {
+            return FilesystemResultCodes::SUCCESS;
+        }
+
+        //  The root can be neither renamed nor removed.  Anything else must still be found at its
+        //      path, as the same entry with the same chain - otherwise it was renamed, removed, or
+        //      removed and replaced.
+
+        if (!IsRoot())
+        {
+            auto current = filesystem.GetDirectory(path_);
+
+            if (!current.Successful())
+            {
+                return (current.ResultCode() == FilesystemResultCodes::DIRECTORY_NOT_FOUND) ? FilesystemResultCodes::DIRECTORY_HANDLE_IS_STALE
+                                                                                            : current.ResultCode();
+            }
+
+            const FAT32Directory &now = static_cast<const FAT32Directory &>(**current);
+
+            if ((now.FirstCluster() != first_cluster_) ||
+                (now.EntryAddress().Cluster() != entry_address_.Cluster()) ||
+                (now.EntryAddress().Index() != entry_address_.Index()))
+            {
+                return FilesystemResultCodes::DIRECTORY_HANDLE_IS_STALE;
+            }
+        }
+
+        validated_at_generation_ = filesystem.DirectoryGeneration();
+
+        return FilesystemResultCodes::SUCCESS;
+    }
+
     inline PointerResult<FilesystemResultCodes, FilesystemDirectory> FAT32Directory::GetDotEntry() const
     {
         using Result = PointerResult<FilesystemResultCodes, FilesystemDirectory>;
@@ -167,16 +204,17 @@ namespace filesystems::fat32
 
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(FilesystemUUID());
+        auto locked_filesystem = FAT32Filesystem::Lock(FilesystemUUID());
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return Result::Failure(FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST);
         }
 
-        //  Get the block io adapter from the filesystem
+        FAT32Filesystem &filesystem = *locked_filesystem;
+        ReturnOnCallFailure(ValidateHandle(filesystem));
 
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        //  Get the block io adapter from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
@@ -251,16 +289,17 @@ namespace filesystems::fat32
 
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(FilesystemUUID());
+        auto locked_filesystem = FAT32Filesystem::Lock(FilesystemUUID());
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return Result::Failure(FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST);
         }
 
-        //  Get the block io adpater from the filesystem
+        FAT32Filesystem &filesystem = *locked_filesystem;
+        ReturnOnCallFailure(ValidateHandle(filesystem));
 
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        //  Get the block io adpater from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
@@ -344,16 +383,17 @@ namespace filesystems::fat32
 
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(FilesystemUUID());
+        auto locked_filesystem = FAT32Filesystem::Lock(FilesystemUUID());
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
         }
 
-        //  Get the block io adapter from the filesystem
+        FAT32Filesystem &filesystem = *locked_filesystem;
+        ReturnOnCallFailure(ValidateHandle(filesystem));
 
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        //  Get the block io adapter from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
@@ -422,6 +462,7 @@ namespace filesystems::fat32
         //  Remove any entry from the cache first
 
         filesystem.DirectoryCache().RemoveEntry(first_cluster_);
+        filesystem.InvalidateDirectoryHandles();
 
         //  Remove the directory cluster entry
 
@@ -444,16 +485,17 @@ namespace filesystems::fat32
 
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(FilesystemUUID());
+        auto locked_filesystem = FAT32Filesystem::Lock(FilesystemUUID());
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return Result::Failure(FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST);
         }
 
-        //  Get the block io adapter from the filesystem
+        FAT32Filesystem &filesystem = *locked_filesystem;
+        ReturnOnCallFailure(ValidateHandle(filesystem));
 
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        //  Get the block io adapter from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
@@ -471,7 +513,7 @@ namespace filesystems::fat32
 
             minstd::unique_ptr<File> file(static_cast<File *>(make_dynamic_unique<FAT32File>(FilesystemUUID(), *file_entry, path, mode, 0, 0).release()), __os_dynamic_heap_resource);
 
-            auto file_ref = GetFileMap().AddFile(minstd::move(file));
+            auto file_ref = GetFileMap().AddFile(minstd::move(file), FAT32OpenFileIdentity(FilesystemUUID(), GetOpaqueData(*file_entry).directory_entry_address_));
 
             ReturnOnFailure(file_ref);
 
@@ -503,9 +545,11 @@ namespace filesystems::fat32
 
         ReturnOnFailure(fat32_file, LogDebug1("Error: %s attempting to create file named: %s\n", ErrorMessage(fat32_file.ResultCode()), filename.c_str()));
 
+        const OpenFileIdentity identity = FAT32OpenFileIdentity(FilesystemUUID(), (*fat32_file)->DirectoryEntryAddress());
+
         minstd::unique_ptr<File> file(dynamic_cast<File *>(fat32_file.Value().release()), __os_dynamic_heap_resource);
 
-        auto file_ref = GetFileMap().AddFile(minstd::move(file));
+        auto file_ref = GetFileMap().AddFile(minstd::move(file), identity);
 
         ReturnOnFailure(file_ref);
 
@@ -602,6 +646,7 @@ namespace filesystems::fat32
         FAT32DirectoryClusterEntry &entry = ((FAT32DirectoryClusterEntry *)block_buffer)[address.Index()];
 
         entry.SetSize(new_size);
+        entry.SetArchive();
 
         auto write_block_result = block_io_adapter.WriteCluster(address.Cluster(), block_buffer);
 
@@ -621,16 +666,17 @@ namespace filesystems::fat32
 
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(FilesystemUUID());
+        auto locked_filesystem = FAT32Filesystem::Lock(FilesystemUUID());
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
         }
 
-        //  Get the block io adapter from the filesystem
+        FAT32Filesystem &filesystem = *locked_filesystem;
+        ReturnOnCallFailure(ValidateHandle(filesystem));
 
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        //  Get the block io adapter from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
@@ -645,10 +691,7 @@ namespace filesystems::fat32
 
         //  Insure the file is not open
 
-        minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path(path_, __dynamic_string_allocator);
-        AppendToPath(absolute_path, file_entry->Name());
-
-        if (GetFileMap().IsFileOpen(absolute_path))
+        if (GetFileMap().IsFileOpen(FAT32OpenFileIdentity(FilesystemUUID(), GetOpaqueData(*file_entry).directory_entry_address_)))
         {
             return FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY;
         }
@@ -700,16 +743,17 @@ namespace filesystems::fat32
 
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(FilesystemUUID());
+        auto locked_filesystem = FAT32Filesystem::Lock(FilesystemUUID());
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
         }
 
-        //  Get the block io adapter from the filesystem
+        FAT32Filesystem &filesystem = *locked_filesystem;
+        ReturnOnCallFailure(ValidateHandle(filesystem));
 
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        //  Get the block io adapter from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
@@ -728,15 +772,10 @@ namespace filesystems::fat32
         //  An open file is tracked in FileMap by its path.  Renaming it under its handles would
         //      orphan that key.
 
-        if (entry_type == FilesystemDirectoryEntryType::FILE)
+        if ((entry_type == FilesystemDirectoryEntryType::FILE) &&
+            GetFileMap().IsFileOpen(FAT32OpenFileIdentity(FilesystemUUID(), GetOpaqueData(*directory_entry).directory_entry_address_)))
         {
-            minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path(path_, __dynamic_string_allocator);
-            AppendToPath(absolute_path, directory_entry->Name());
-
-            if (GetFileMap().IsFileOpen(absolute_path))
-            {
-                return FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY;
-            }
+            return FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY;
         }
 
         //  Create the new directory entry
@@ -749,7 +788,15 @@ namespace filesystems::fat32
 
         //  Remove any cache entries and the directory entry
 
-        filesystem.DirectoryCache().RemoveEntry(GetOpaqueData(*directory_entry).FirstCluster());
+        if (entry_type == FilesystemDirectoryEntryType::DIRECTORY)
+        {
+            filesystem.DirectoryCache().Clear();
+            filesystem.InvalidateDirectoryHandles();
+        }
+        else
+        {
+            filesystem.DirectoryCache().RemoveEntry(GetOpaqueData(*directory_entry).FirstCluster());
+        }
 
         //  Both entries now reference the same cluster chain.  If the old one cannot be removed,
         //      remove the new one rather than leave the chain cross-linked.  The rollback is best

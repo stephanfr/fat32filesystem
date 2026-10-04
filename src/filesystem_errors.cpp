@@ -7,7 +7,7 @@
 namespace filesystems
 {
 
-    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 43);
+    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 44);
 
     const char *ErrorMessage(FilesystemResultCodes code)
     {
@@ -81,6 +81,9 @@ namespace filesystems
 
         case FilesystemResultCodes::DIRECTORY_NOT_EMPTY:
             return "Directory is not empty";
+
+        case FilesystemResultCodes::DIRECTORY_HANDLE_IS_STALE:
+            return "Directory handle is stale - the directory was renamed or removed";
 
         case FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY:
             return "File already opened exclusively";

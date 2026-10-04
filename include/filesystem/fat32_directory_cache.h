@@ -13,7 +13,6 @@
 #include "services/murmur_hash.h"
 
 #include "heaps.h"
-#include "synchronization.h"
 
 #include "filesystem/fat32_directory.h"
 

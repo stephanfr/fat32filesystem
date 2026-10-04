@@ -526,6 +526,14 @@ namespace filesystems::fat32
         }
 
         /**
+         * @brief Marks the entry as modified since it was last backed up (ATTR_ARCHIVE).
+         */
+        void SetArchive() noexcept
+        {
+            attributes_ |= FAT32DirectoryEntryAttributeArchive;
+        }
+
+        /**
          * @brief Returns the short filename for the object referenced by the directory cluster entry
          *
          * @param short_filename SIDE EFFECT The object to store the converted short filename.

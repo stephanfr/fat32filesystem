@@ -147,16 +147,16 @@ namespace
 
         CHECK(subdir.Successful());
 
-        minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> absolute_path("/SUBDIR1/Lorem ipsum dolor sit amet.text");
+        const OpenFileIdentity lorem = FAT32OpenFileIdentity(test_fs.FilesystemUUID(), FAT32DirectoryEntryAddress(FAT32ClusterIndex(3), 14));
 
         auto file = (*subdir)->OpenFile(minstd::fixed_string<MAX_FILENAME_LENGTH>("Lorem ipsum dolor sit amet.text"), FileModes::READ);
 
         CHECK(file.Successful());
-        CHECK(GetFileMap().IsFileOpen(absolute_path));
+        CHECK(GetFileMap().IsFileOpen(lorem));
 
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
 
-        CHECK_FALSE(GetFileMap().IsFileOpen(absolute_path));
+        CHECK_FALSE(GetFileMap().IsFileOpen(lorem));
 
         //  A second Close() on the same handle is a use-after-free until RemoveFile hands back
         //      the owning unique_ptr.  Do not add that call here until it does.
@@ -299,5 +299,55 @@ namespace
         }
 
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
+    }
+
+    TEST(FAT32FileTest, WritingAFileMarksItArchiveAndReadingDoesNot)
+    {
+        //  Clear ARCHIVE on Lorem's short entry (SUBDIR1 cluster 3 idx 14).
+
+        const uint32_t attribute_offset = (14 * 32) + 11;
+
+        minstd::heap_buffer<uint8_t> raw(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(3), raw.data()));
+        raw.data()[attribute_offset] = 0x00;
+        CHECK(test_fs.Adapter().WriteCluster(FAT32ClusterIndex(3), raw.data()) == BlockIOResultCodes::SUCCESS);
+
+        auto root = test_fs.RootDirectory();
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        minstd::fixed_string<MAX_FILENAME_LENGTH> name("Lorem ipsum dolor sit amet.text");
+
+        //  Reading is not a modification.
+
+        auto reader = (*subdir)->OpenFile(name, FileModes::READ);
+
+        CHECK(reader.Successful());
+
+        minstd::heap_buffer<uint8_t> contents(__os_dynamic_heap_resource, 2048);
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*reader)->Read(contents));
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*reader)->Close());
+
+        CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(3), raw.data()));
+        CHECK_EQUAL(0x00, raw.data()[attribute_offset]);
+
+        //  Overwriting in place is - even though the size does not change.
+
+        auto writer = (*subdir)->OpenFile(name, FileModes::WRITE);
+
+        CHECK(writer.Successful());
+
+        minstd::heap_buffer<uint8_t> payload(__os_dynamic_heap_resource, 16);
+
+        FillBuffer(payload, 0xEE, 16);
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*writer)->Write(payload));
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*writer)->Close());
+
+        CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(3), raw.data()));
+        CHECK_EQUAL(0x20, raw.data()[attribute_offset]);
     }
 }
