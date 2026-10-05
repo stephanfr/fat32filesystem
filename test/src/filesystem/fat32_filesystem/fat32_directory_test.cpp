@@ -971,4 +971,114 @@ namespace
         CHECK(by_alias.Successful());
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*by_alias)->Close());
     }
+
+    TEST(FAT32DirectoryTest, RenamingADirectoryKeepsItsSubdirectoriesCached)
+    {
+        auto root = test_fs.RootDirectory();
+        FAT32Filesystem &filesystem = test_fs.Filesystem();
+
+        auto outer = root->CreateDirectory(minstd::fixed_string<>("OUTER"));
+
+        CHECK(outer.Successful());
+        CHECK((*outer)->CreateDirectory(minstd::fixed_string<>("INNER")).Successful());
+
+        //  Resolve /OUTER/INNER once, so both steps are cached.
+
+        CHECK(filesystem.GetDirectory(minstd::fixed_string<>("/OUTER/INNER")).Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, root->RenameDirectory(minstd::fixed_string<>("OUTER"), minstd::fixed_string<>("RENAMED")));
+
+        //  Only OUTER's own name went stale.  INNER is cached under OUTER's first cluster, which the
+        //      rename did not change, so the second step of this lookup is a cache hit.
+
+        const uint64_t hits_before = filesystem.Statistics().DirectoryCacheHits();
+
+        CHECK(filesystem.GetDirectory(minstd::fixed_string<>("/RENAMED/INNER")).Successful());
+
+        CHECK_EQUAL(hits_before + 1, filesystem.Statistics().DirectoryCacheHits());
+
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, filesystem.GetDirectory(minstd::fixed_string<>("/OUTER/INNER")).ResultCode());
+    }
+
+    TEST(FAT32DirectoryTest, DirectoryLookupsIgnoreCase)
+    {
+        FAT32Filesystem &filesystem = test_fs.Filesystem();
+
+        CHECK(filesystem.GetDirectory(minstd::fixed_string<>("/SUBDIR1")).Successful());
+
+        const uint64_t hits_before = filesystem.Statistics().DirectoryCacheHits();
+
+        //  FAT compares names without case, so this is the directory just cached.
+
+        CHECK(filesystem.GetDirectory(minstd::fixed_string<>("/subdir1")).Successful());
+
+        CHECK_EQUAL(hits_before + 1, filesystem.Statistics().DirectoryCacheHits());
+    }
+
+    TEST(FAT32DirectoryTest, DirectoryLookupsDoNotGrowTheHeap)
+    {
+        constexpr uint32_t DIRECTORY_COUNT = 20;
+
+        auto root = test_fs.RootDirectory();
+        FAT32Filesystem &filesystem = test_fs.Filesystem();
+
+        char path[] = "/DIR00";
+
+        for (uint32_t i = 0; i < DIRECTORY_COUNT; i++)
+        {
+            path[4] = '0' + (i / 10);
+            path[5] = '0' + (i % 10);
+
+            CHECK(root->CreateDirectory(minstd::fixed_string<>(path + 1)).Successful());
+        }
+
+        //  The cache took all of its memory when the volume was mounted (the tests map the cache heap
+        //      onto the dynamic heap).  Filling it must not take any more.
+
+        const size_t heap_bytes_before = __os_dynamic_heap_core.bytes_in_use();
+
+        for (uint32_t i = 0; i < DIRECTORY_COUNT; i++)
+        {
+            path[4] = '0' + (i / 10);
+            path[5] = '0' + (i % 10);
+
+            CHECK(filesystem.GetDirectory(minstd::fixed_string<>(path)).Successful());
+        }
+
+        CHECK_EQUAL(heap_bytes_before, __os_dynamic_heap_core.bytes_in_use());
+    }
+
+    TEST(FAT32DirectoryTest, ARenamedDirectoryIsGoneUnderBothItsOldNames)
+    {
+        auto root = test_fs.RootDirectory();
+        FAT32Filesystem &filesystem = test_fs.Filesystem();
+
+        CHECK(root->CreateDirectory(minstd::fixed_string<>("Long Directory Name")).Successful());
+
+        //  Cache it under its long name and under its 8.3 alias.
+
+        CHECK(filesystem.GetDirectory(minstd::fixed_string<>("/Long Directory Name")).Successful());
+        CHECK(filesystem.GetDirectory(minstd::fixed_string<>("/LONGDI~1")).Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, root->RenameDirectory(minstd::fixed_string<>("Long Directory Name"), minstd::fixed_string<>("Other Name")));
+
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, filesystem.GetDirectory(minstd::fixed_string<>("/Long Directory Name")).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, filesystem.GetDirectory(minstd::fixed_string<>("/LONGDI~1")).ResultCode());
+        CHECK(filesystem.GetDirectory(minstd::fixed_string<>("/Other Name")).Successful());
+    }
+
+    TEST(FAT32DirectoryTest, ARemovedDirectoryIsNotFoundThroughTheCache)
+    {
+        auto root = test_fs.RootDirectory();
+        FAT32Filesystem &filesystem = test_fs.Filesystem();
+
+        CHECK(root->CreateDirectory(minstd::fixed_string<>("DOOMED")).Successful());
+
+        auto doomed = filesystem.GetDirectory(minstd::fixed_string<>("/DOOMED"));
+
+        CHECK(doomed.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*doomed)->RemoveDirectory());
+
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, filesystem.GetDirectory(minstd::fixed_string<>("/DOOMED")).ResultCode());
+    }
 }

@@ -194,6 +194,6 @@ namespace filesystems::fat32
 
         uint64_t directory_generation_ = 1;
 
-        ValueResult<FilesystemResultCodes, FAT32DirectoryCluster::directory_entry_const_iterator> FindDirectoryEntry(const FilesystemPath &path);
+        ValueResult<FilesystemResultCodes, FAT32DirectoryCacheEntry> ResolveDirectory(const FilesystemPath &path);
     };
 } // namespace filesystems::fat32

@@ -13,6 +13,8 @@ namespace
     using namespace filesystems;
     using namespace filesystems::fat32;
 
+    constexpr uint64_t TEST_SEED = 1;
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
     TEST_GROUP (FAT32DirectoryCache)
@@ -33,223 +35,230 @@ namespace
     };
 #pragma GCC diagnostic pop
 
-    //
-    //  Tests start below
-    //
+    //  A directory as the cache records it.  These tests only look at its first cluster.
 
-    TEST(FAT32DirectoryCache, BasicTest)
+    FAT32DirectoryCacheEntry Directory(uint32_t first_cluster)
     {
-        FAT32DirectoryCache directory_cache(1024);
-
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY, FAT32DirectoryEntryAddress(FAT32ClusterIndex(1), 1), FAT32ClusterIndex(1), FAT32Compact8Dot3Filename("director", "y1"), minstd::fixed_string<>("directory1"));
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY, FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 2), FAT32ClusterIndex(2), FAT32Compact8Dot3Filename("director", "y2"), minstd::fixed_string<>("directory2"));
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY, FAT32DirectoryEntryAddress(FAT32ClusterIndex(3), 3), FAT32ClusterIndex(3), FAT32Compact8Dot3Filename("director", "y3"), minstd::fixed_string<>("directory3"));
-
-        {
-            auto entry1 = directory_cache.FindEntry(FAT32ClusterIndex(1));
-            CHECK(entry1.has_value());
-            CHECK_EQUAL((uint32_t)FAT32DirectoryCacheEntryType::DIRECTORY, (uint32_t)entry1->get().EntryType());
-            CHECK_EQUAL(1, (uint32_t)entry1->get().FirstClusterId());
-            STRCMP_EQUAL("directory1", entry1->get().AbsolutePath().c_str());
-
-            auto index1 = directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory1"));
-            CHECK_EQUAL(1, (uint32_t)index1.value());
-        }
-
-        {
-            auto entry2 = directory_cache.FindEntry(FAT32ClusterIndex(2));
-            CHECK(entry2.has_value());
-            CHECK_EQUAL((uint32_t)FAT32DirectoryCacheEntryType::DIRECTORY, (uint32_t)entry2->get().EntryType());
-            CHECK_EQUAL(2, (uint32_t)entry2->get().FirstClusterId());
-            STRCMP_EQUAL("directory2", entry2->get().AbsolutePath().c_str());
-
-            auto index2 = directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory2"));
-            CHECK_EQUAL(2, (uint32_t)index2.value());
-        }
-
-        {
-            auto entry3 = directory_cache.FindEntry(FAT32ClusterIndex(3));
-            CHECK(entry3.has_value());
-            CHECK_EQUAL((uint32_t)FAT32DirectoryCacheEntryType::DIRECTORY, (uint32_t)entry3->get().EntryType());
-            CHECK_EQUAL(3, (uint32_t)entry3->get().FirstClusterId());
-            STRCMP_EQUAL("directory3", entry3->get().AbsolutePath().c_str());
-
-            auto index3 = directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory3"));
-            CHECK_EQUAL(3, (uint32_t)index3.value());
-        }
-
-        directory_cache.RemoveEntry(FAT32ClusterIndex(2));
-
-        CHECK(directory_cache.FindEntry(FAT32ClusterIndex(2)).has_value() == false);
-        CHECK(directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory2")).has_value() == false);
-
-        {
-            auto entry1 = directory_cache.FindEntry(FAT32ClusterIndex(1));
-            CHECK(entry1.has_value());
-            CHECK_EQUAL((uint32_t)FAT32DirectoryCacheEntryType::DIRECTORY, (uint32_t)entry1->get().EntryType());
-            CHECK_EQUAL(1, (uint32_t)entry1->get().FirstClusterId());
-            STRCMP_EQUAL("directory1", entry1->get().AbsolutePath().c_str());
-
-            auto index1 = directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory1"));
-            CHECK_EQUAL(1, (uint32_t)index1.value());
-        }
-
-        {
-            auto entry3 = directory_cache.FindEntry(FAT32ClusterIndex(3));
-            CHECK(entry3.has_value());
-            CHECK_EQUAL((uint32_t)FAT32DirectoryCacheEntryType::DIRECTORY, (uint32_t)entry3->get().EntryType());
-            CHECK_EQUAL(3, (uint32_t)entry3->get().FirstClusterId());
-            STRCMP_EQUAL("directory3", entry3->get().AbsolutePath().c_str());
-
-            auto index3 = directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory3"));
-            CHECK_EQUAL(3, (uint32_t)index3.value());
-        }
-
-        directory_cache.RemoveEntry(FAT32ClusterIndex(3));
-        CHECK(directory_cache.FindEntry(FAT32ClusterIndex(3)).has_value() == false);
-        CHECK(directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory3")).has_value() == false);
-
-        {
-            auto entry1 = directory_cache.FindEntry(FAT32ClusterIndex(1));
-            CHECK(entry1.has_value());
-            CHECK_EQUAL((uint32_t)FAT32DirectoryCacheEntryType::DIRECTORY, (uint32_t)entry1->get().EntryType());
-            CHECK_EQUAL(1, (uint32_t)entry1->get().FirstClusterId());
-            STRCMP_EQUAL("directory1", entry1->get().AbsolutePath().c_str());
-
-            auto index1 = directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory1"));
-            CHECK_EQUAL(1, (uint32_t)index1.value());
-        }
-
-        directory_cache.RemoveEntry(FAT32ClusterIndex(1));
-        CHECK(directory_cache.FindEntry(FAT32ClusterIndex(1)).has_value() == false);
-        CHECK(directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory1")).has_value() == false);
+        return FAT32DirectoryCacheEntry(FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), first_cluster),
+                                        FAT32ClusterIndex(first_cluster),
+                                        FAT32Compact8Dot3Filename("DIR", ""));
     }
 
-    TEST(FAT32DirectoryCache, NegativeTests)
+    void Add(FAT32DirectoryCache &cache, uint32_t parent, const char *name, uint32_t first_cluster)
     {
-        FAT32DirectoryCache directory_cache(1024);
-
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY, FAT32DirectoryEntryAddress(FAT32ClusterIndex(1), 1), FAT32ClusterIndex(1), FAT32Compact8Dot3Filename("director", "y1"), minstd::fixed_string<>("directory1"));
-        CHECK(directory_cache.FindEntry(FAT32ClusterIndex(1)).has_value());
-        CHECK(directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory1")).has_value());
-
-        //  Simulate a path has collision by adding a new entry with a different cluster index but the same path
-
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY, FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 2), FAT32ClusterIndex(2), FAT32Compact8Dot3Filename("director", "y1"), minstd::fixed_string<>("directory1"));
-        CHECK(directory_cache.FindEntry(FAT32ClusterIndex(1)).has_value());
-        CHECK(directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory1")).has_value());
-        CHECK(!directory_cache.FindEntry(FAT32ClusterIndex(2)).has_value());
-        CHECK(!directory_cache.FindFirstClusterIndex(minstd::fixed_string<>("directory2")).has_value());
-
-        //  Re-inserting the first entry should be a no-op
-
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY, FAT32DirectoryEntryAddress(FAT32ClusterIndex(1), 1), FAT32ClusterIndex(1), FAT32Compact8Dot3Filename("director", "y1"), minstd::fixed_string<>("directory1"));
-
-        //  Removing a non-existant entry should be a no-op
-
-        directory_cache.RemoveEntry(FAT32ClusterIndex(4));
+        cache.Add(FAT32ClusterIndex(parent), name, Directory(first_cluster));
     }
 
-    TEST(FAT32DirectoryCache, SizeAndClearTest)
+    bool IsCached(FAT32DirectoryCache &cache, uint32_t parent, const char *name)
     {
-        FAT32DirectoryCache directory_cache(10);
-        char buffer[14] = "directory";
-        char compact_extension[4] = "y  ";
+        return cache.Find(FAT32ClusterIndex(parent), name).has_value();
+    }
 
-        for (int i = 1; i <= 12; i++)
+    bool Resolves(FAT32DirectoryCache &cache, uint32_t parent, const char *name, uint32_t first_cluster)
+    {
+        auto found = cache.Find(FAT32ClusterIndex(parent), name);
+
+        return found.has_value() && (found->FirstClusterId() == FAT32ClusterIndex(first_cluster));
+    }
+
+    //  ... TEST_GROUP (FAT32DirectoryCache) unchanged ...
+
+    TEST(FAT32DirectoryCache, FindsWhatWasAdded)
+    {
+        FAT32DirectoryCache cache(16, TEST_SEED);
+
+        CHECK(!IsCached(cache, 2, "Documents"));
+
+        Add(cache, 2, "Documents", 10);
+
+        CHECK(Resolves(cache, 2, "Documents", 10));
+        CHECK(cache.Size() == 1);
+        CHECK(cache.Hits() == 1);
+        CHECK(cache.Misses() == 1);
+    }
+
+    TEST(FAT32DirectoryCache, NamesCompareWithoutCase)
+    {
+        FAT32DirectoryCache cache(16, TEST_SEED);
+
+        Add(cache, 2, "Documents", 10);
+
+        CHECK(Resolves(cache, 2, "DOCUMENTS", 10));
+        CHECK(Resolves(cache, 2, "documents", 10));
+        CHECK(!IsCached(cache, 2, "Document"));
+        CHECK(!IsCached(cache, 2, "Documents2"));
+    }
+
+    TEST(FAT32DirectoryCache, TheSameNameInDifferentDirectoriesIsADifferentEntry)
+    {
+        FAT32DirectoryCache cache(16, TEST_SEED);
+
+        Add(cache, 2, "DATA", 10);
+        Add(cache, 10, "DATA", 11);
+
+        CHECK(Resolves(cache, 2, "DATA", 10));
+        CHECK(Resolves(cache, 10, "DATA", 11));
+        CHECK(!IsCached(cache, 11, "DATA"));
+    }
+
+    TEST(FAT32DirectoryCache, ReAddingANameReplacesItsEntry)
+    {
+        FAT32DirectoryCache cache(16, TEST_SEED);
+
+        Add(cache, 2, "DATA", 10);
+        Add(cache, 2, "data", 10);
+
+        CHECK(cache.Size() == 1);
+    }
+
+    TEST(FAT32DirectoryCache, AFullCacheForgetsTheLeastRecentlyUsedName)
+    {
+        FAT32DirectoryCache cache(2, TEST_SEED);
+
+        Add(cache, 2, "A", 10);
+        Add(cache, 2, "B", 11);
+
+        CHECK(IsCached(cache, 2, "A"));     //  A is now the most recently used
+
+        Add(cache, 2, "C", 12);
+
+        CHECK(cache.Size() == 2);
+        CHECK(Resolves(cache, 2, "A", 10));
+        CHECK(!IsCached(cache, 2, "B"));
+        CHECK(Resolves(cache, 2, "C", 12));
+    }
+
+    TEST(FAT32DirectoryCache, RemovedSlotsAreReusedBeforeAnythingIsEvicted)
+    {
+        FAT32DirectoryCache cache(2, TEST_SEED);
+
+        Add(cache, 2, "A", 10);
+        Add(cache, 2, "B", 11);
+
+        cache.Remove(FAT32ClusterIndex(10));
+
+        Add(cache, 2, "C", 12);
+
+        CHECK(cache.Size() == 2);
+        CHECK(Resolves(cache, 2, "B", 11));
+        CHECK(Resolves(cache, 2, "C", 12));
+    }
+
+    TEST(FAT32DirectoryCache, RemoveForgetsEveryNameForADirectoryButNotItsChildren)
+    {
+        FAT32DirectoryCache cache(16, TEST_SEED);
+
+        Add(cache, 2, "Long Directory Name", 10);
+        Add(cache, 2, "LONGDI~1", 10);
+        Add(cache, 10, "CHILD", 11);
+
+        cache.Remove(FAT32ClusterIndex(10));
+
+        CHECK(!IsCached(cache, 2, "Long Directory Name"));
+        CHECK(!IsCached(cache, 2, "LONGDI~1"));
+        CHECK(Resolves(cache, 10, "CHILD", 11));
+        CHECK(cache.Size() == 1);
+    }
+
+    TEST(FAT32DirectoryCache, RemoveWithChildrenAlsoForgetsNamesInsideTheDirectory)
+    {
+        FAT32DirectoryCache cache(16, TEST_SEED);
+
+        Add(cache, 2, "Long Directory Name", 10);
+        Add(cache, 2, "LONGDI~1", 10);
+        Add(cache, 10, "CHILD", 11);
+        Add(cache, 2, "OTHER", 12);
+
+        cache.RemoveWithChildren(FAT32ClusterIndex(10));
+
+        CHECK(!IsCached(cache, 2, "Long Directory Name"));
+        CHECK(!IsCached(cache, 2, "LONGDI~1"));
+        CHECK(!IsCached(cache, 10, "CHILD"));
+        CHECK(Resolves(cache, 2, "OTHER", 12));
+        CHECK(cache.Size() == 1);
+    }
+
+    TEST(FAT32DirectoryCache, OnlyLegalFAT32NamesAreCached)
+    {
+        FAT32DirectoryCache cache(16, TEST_SEED);
+
+        char name[MAX_FILENAME_LENGTH + 2];
+
+        for (size_t i = 0; i <= MAX_FILENAME_LENGTH; i++)
         {
-            itoa(i, buffer + 9, 10);
-            itoa(i, compact_extension + 1, 10);
-            directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY, FAT32DirectoryEntryAddress(FAT32ClusterIndex(i), i), FAT32ClusterIndex(i), FAT32Compact8Dot3Filename("director", compact_extension), minstd::fixed_string<>(buffer));
+            name[i] = 'A';
         }
 
-        CHECK(directory_cache.MaxSize() == 10);
-        CHECK(directory_cache.CurrentSize() == 10);
-        CHECK(!directory_cache.FindEntry(FAT32ClusterIndex(1)).has_value());
-        CHECK(!directory_cache.FindEntry(FAT32ClusterIndex(2)).has_value());
-        CHECK(directory_cache.FindEntry(FAT32ClusterIndex(3)).has_value());
+        name[MAX_FILENAME_LENGTH + 1] = 0;      //  256 characters - too long
 
-        directory_cache.Clear();
+        Add(cache, 2, name, 10);
 
-        CHECK(directory_cache.CurrentSize() == 0);
+        CHECK(cache.Size() == 0);
+        CHECK(!IsCached(cache, 2, name));
+
+        name[MAX_FILENAME_LENGTH] = 0;          //  255 characters - the longest legal name
+
+        Add(cache, 2, name, 10);
+
+        CHECK(Resolves(cache, 2, name, 10));
+
+        Add(cache, 2, "", 11);
+
+        CHECK(cache.Size() == 1);
     }
 
-    TEST(FAT32DirectoryCache, EvictedPathCanBeReCached)
+    TEST(FAT32DirectoryCache, AllocatesNothingAfterConstruction)
     {
-        constexpr size_t CACHE_SIZE = 2;
+        FAT32DirectoryCache cache(8, TEST_SEED);
 
-        FAT32DirectoryCache directory_cache(CACHE_SIZE, MurmurHash64ASeed(1));
+        //  The tests map the filesystem cache heap onto the dynamic heap.
 
-        minstd::fixed_string<> first_path("/first");
+        const size_t heap_bytes_after_construction = __os_dynamic_heap_core.bytes_in_use();
 
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
-                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 0),
-                                 FAT32ClusterIndex(10),
-                                 FAT32Compact8Dot3Filename("FIRST", ""),
-                                 first_path);
+        char name[] = "DIR000";
 
-        CHECK(directory_cache.FindEntry(FAT32ClusterIndex(10)).has_value());
+        for (uint32_t i = 0; i < 100; i++)
+        {
+            name[3] = '0' + (i / 100);
+            name[4] = '0' + ((i / 10) % 10);
+            name[5] = '0' + (i % 10);
 
-        //  Push /first out of the cache.
+            Add(cache, 2, name, 100 + i);
 
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
-                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 1),
-                                 FAT32ClusterIndex(11),
-                                 FAT32Compact8Dot3Filename("SECOND", ""),
-                                 minstd::fixed_string<>("/second"));
+            CHECK(IsCached(cache, 2, name));
+        }
 
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
-                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 2),
-                                 FAT32ClusterIndex(12),
-                                 FAT32Compact8Dot3Filename("THIRD", ""),
-                                 minstd::fixed_string<>("/third"));
+        CHECK(cache.Size() == 8);
 
-        CHECK_FALSE(directory_cache.FindEntry(FAT32ClusterIndex(10)).has_value());
+        cache.RemoveWithChildren(FAT32ClusterIndex(195));
+        cache.Clear();
 
-        //  Re-add it.  Pre-fix the stale path-hash entry makes AddEntry early-return, so
-        //      nothing is inserted and /first can never re-enter the cache for the lifetime
-        //      of the filesystem.
-
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
-                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 0),
-                                 FAT32ClusterIndex(10),
-                                 FAT32Compact8Dot3Filename("FIRST", ""),
-                                 first_path);
-
-        CHECK(directory_cache.FindEntry(FAT32ClusterIndex(10)).has_value());
+        CHECK(cache.Size() == 0);
+        CHECK(heap_bytes_after_construction == __os_dynamic_heap_core.bytes_in_use());
     }
 
-    TEST(FAT32DirectoryCache, ReAddingTheSameEntryIsNotCountedAsACollision)
+    TEST(FAT32DirectoryCache, IsDisabledWhenItsMemoryCannotBeAllocated)
     {
-        FAT32DirectoryCache directory_cache(16, MurmurHash64ASeed(1));
+        //  MAX_CAPACITY entries need more than the 256 MB test heap holds.
 
-        minstd::fixed_string<> path("/same");
+        FAT32DirectoryCache cache(FAT32DirectoryCache::MAX_CAPACITY, TEST_SEED);
 
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
-                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 0),
-                                 FAT32ClusterIndex(20),
-                                 FAT32Compact8Dot3Filename("SAME", ""),
-                                 path);
+        CHECK(cache.Capacity() == 0);
 
-        const uint64_t collisions_before = directory_cache.Collisions();
+        Add(cache, 2, "A", 10);
 
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
-                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 0),
-                                 FAT32ClusterIndex(20),
-                                 FAT32Compact8Dot3Filename("SAME", ""),
-                                 path);
-
-        CHECK_EQUAL(collisions_before, directory_cache.Collisions());
-
-        //  A genuinely different cluster reaching the same hash still counts.
-
-        directory_cache.AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
-                                 FAT32DirectoryEntryAddress(FAT32ClusterIndex(2), 1),
-                                 FAT32ClusterIndex(21),
-                                 FAT32Compact8Dot3Filename("OTHER", ""),
-                                 path);
-
-        CHECK_EQUAL(collisions_before + 1, directory_cache.Collisions());
+        CHECK(!IsCached(cache, 2, "A"));
+        CHECK(cache.Size() == 0);
     }
 
+    TEST(FAT32DirectoryCache, ACapacityOfZeroDisablesTheCache)
+    {
+        FAT32DirectoryCache cache(0, TEST_SEED);
+
+        CHECK(cache.Capacity() == 0);
+
+        Add(cache, 2, "A", 10);
+
+        CHECK(!IsCached(cache, 2, "A"));
+    }
 }

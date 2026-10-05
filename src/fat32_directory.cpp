@@ -239,9 +239,9 @@ namespace filesystems::fat32
 
         AppendToPath(directory_absolute_path, directory_name);
 
-        //  Check the cache for the directory
+        //  Check the cache: is this name in this directory already known?
 
-        auto cache_entry = filesystem.DirectoryCache().FindEntry(directory_absolute_path);
+        auto cache_entry = filesystem.DirectoryCache().Find(first_cluster_, directory_name.c_str());
 
         if (cache_entry.has_value())
         {
@@ -249,9 +249,9 @@ namespace filesystems::fat32
 
             minstd::unique_ptr<FilesystemDirectory> directory(AsFilesystemDirectory(filesystem.Id(),
                                                                                     directory_absolute_path,
-                                                                                    cache_entry.value().get().EntryAddress(),
-                                                                                    cache_entry.value().get().FirstClusterId(),
-                                                                                    cache_entry.value().get().CompactName()));
+                                                                                    cache_entry->EntryAddress(),
+                                                                                    cache_entry->FirstClusterId(),
+                                                                                    cache_entry->CompactName()));
 
             return Result::Success(minstd::move(directory));
         }
@@ -264,11 +264,11 @@ namespace filesystems::fat32
 
         //  Found the directory entry, so add it to the cache
 
-        filesystem.DirectoryCache().AddEntry(FAT32DirectoryCacheEntryType::DIRECTORY,
-                                             GetOpaqueData(*directory_entry).directory_entry_address_,
-                                             GetOpaqueData(*directory_entry).FirstCluster(),
-                                             GetOpaqueData(*directory_entry).directory_entry_.CompactName(),
-                                             directory_absolute_path);
+        filesystem.DirectoryCache().Add(first_cluster_,
+                                        directory_name.c_str(),
+                                        FAT32DirectoryCacheEntry(GetOpaqueData(*directory_entry).directory_entry_address_,
+                                                                 GetOpaqueData(*directory_entry).FirstCluster(),
+                                                                 GetOpaqueData(*directory_entry).directory_entry_.CompactName()));
 
         //  Create the directory object and return it
 
@@ -461,12 +461,12 @@ namespace filesystems::fat32
 
         //  Remove any entry from the cache first
 
-        filesystem.DirectoryCache().RemoveEntry(first_cluster_);
+        filesystem.DirectoryCache().RemoveWithChildren(first_cluster_);
         filesystem.InvalidateDirectoryHandles();
 
         //  Remove the directory cluster entry
 
-        ReturnOnCallFailure(parent_directory_cluster.RemoveEntry(entry_address_));
+        filesystem.DirectoryCache().RemoveWithChildren(first_cluster_);
 
         //  Release the clusters for the directory
 
@@ -712,10 +712,6 @@ namespace filesystems::fat32
             return FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY;
         }
 
-        //  Remove any entry from the cache first
-
-        filesystem.DirectoryCache().RemoveEntry(GetOpaqueData(*file_entry).FirstCluster());
-
         //  Get the directory cluster
 
         FAT32DirectoryCluster directory_cluster = FAT32DirectoryCluster(filesystem.Id(),
@@ -805,12 +801,8 @@ namespace filesystems::fat32
 
         if (entry_type == FilesystemDirectoryEntryType::DIRECTORY)
         {
-            filesystem.DirectoryCache().Clear();
+            filesystem.DirectoryCache().Remove(GetOpaqueData(*directory_entry).FirstCluster());
             filesystem.InvalidateDirectoryHandles();
-        }
-        else
-        {
-            filesystem.DirectoryCache().RemoveEntry(GetOpaqueData(*directory_entry).FirstCluster());
         }
 
         //  Both entries now reference the same cluster chain.  If the old one cannot be removed,
