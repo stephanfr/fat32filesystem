@@ -7,7 +7,7 @@
 namespace filesystems
 {
 
-    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 44);
+    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 46);
 
     const char *ErrorMessage(FilesystemResultCodes code)
     {
@@ -75,6 +75,12 @@ namespace filesystems
 
         case FilesystemResultCodes::FILE_NOT_OPENED_FOR_APPEND:
             return "File not opened for Append";
+
+        case FilesystemResultCodes::FILE_IS_READ_ONLY:
+            return "File is read-only";
+
+        case FilesystemResultCodes::FILE_TOO_LARGE:
+            return "File would exceed the FAT32 maximum size of 4 GiB - 1 byte";
 
         case FilesystemResultCodes::ROOT_DIRECTORY_CANNOT_BE_REMOVED:
             return "Root directory cannot be removed";

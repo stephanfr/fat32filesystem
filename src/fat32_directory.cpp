@@ -505,8 +505,17 @@ namespace filesystems::fat32
 
         if (file_entry.Successful())
         {
-            //  File exists, so open it.  Get the full path first and use the on-disk name
-            //      so we don't run into problems with different spellings (long, short, etc.) of the filename.
+            //  File exists but we need to insure that it is not read-only when we
+            //      are trying to open it for writing or appending.
+
+            if ((file_entry->Attributes() & FAT32DirectoryEntryAttributeReadOnly) &&
+                (HasFileMode(mode, FileModes::WRITE) || HasFileMode(mode, FileModes::APPEND)))
+            {
+                return Result::Failure(FilesystemResultCodes::FILE_IS_READ_ONLY);
+            }
+            
+            //  Get the full path first and use the on-disk name so we don't run into problems
+            //      with different spellings (long, short, etc.) of the filename.
 
             minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> path(path_, __dynamic_string_allocator);
             AppendToPath(path, file_entry->Name());
@@ -687,6 +696,13 @@ namespace filesystems::fat32
         if (!file_entry.Successful())
         {
             return FilesystemResultCodes::FILE_NOT_FOUND;
+        }
+
+        //  Insure the file is not read-only, we cannot delete read-only files
+
+        if (file_entry->Attributes() & FAT32DirectoryEntryAttributeReadOnly)
+        {
+            return FilesystemResultCodes::FILE_IS_READ_ONLY;
         }
 
         //  Insure the file is not open

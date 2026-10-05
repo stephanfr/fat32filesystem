@@ -6,6 +6,7 @@
 #include "heaps.h"
 
 #include <ctype.h>
+#include <string.h>
 
 namespace filesystems
 {
@@ -83,6 +84,16 @@ namespace filesystems
                 }
 
                 path->parsed_path_[i] = 0;
+            }
+        }
+
+        //  Handle dot and dot-dot components as illegal
+
+        for (auto itr = path->begin(); itr != path->end(); itr++)
+        {
+            if ((strncmp(*itr, ".", 2) == 0) || (strncmp(*itr, "..", 3) == 0))
+            {
+                return Result::Failure(FilesystemResultCodes::ILLEGAL_PATH);
             }
         }
 

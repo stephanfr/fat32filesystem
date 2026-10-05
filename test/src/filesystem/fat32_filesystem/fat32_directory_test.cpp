@@ -885,4 +885,90 @@ namespace
         CHECK(file.Successful());
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*file)->Close());
     }
+
+    TEST(FAT32DirectoryTest, DotEntriesAreNotNames)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir1 = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir1.Successful());
+
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND,
+                    (*subdir1)->RenameDirectory(minstd::fixed_string<>("."), minstd::fixed_string<>("LOOP")));
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND,
+                    (*subdir1)->RenameDirectory(minstd::fixed_string<>(".."), minstd::fixed_string<>("UP")));
+
+        //  Nothing was created...
+
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, (*subdir1)->GetDirectory(minstd::fixed_string<>("LOOP")).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, (*subdir1)->GetDirectory(minstd::fixed_string<>("UP")).ResultCode());
+
+        //  ...and both dot entries are still in place.
+
+        const FAT32ClusterIndex subdir1_cluster = static_cast<FAT32Directory &>(**subdir1).FirstCluster();
+
+        minstd::heap_buffer<uint8_t> raw(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(subdir1_cluster, raw.data()));
+        CHECK(memcmp(raw.data(), ".          ", 11) == 0);
+        CHECK(memcmp(raw.data() + 32, "..         ", 11) == 0);
+
+        //  '.' and '..' as directory names still work - they are handled before any lookup.
+
+        CHECK((*subdir1)->GetDirectory(minstd::fixed_string<>("..")).Successful());
+    }
+
+    TEST(FAT32DirectoryTest, NameWithEmbeddedSpaceGetsALongNameAndAnAlias)
+    {
+        auto root = test_fs.RootDirectory();
+
+        auto created = root->CreateDirectory(minstd::fixed_string<>("MY DIR"));
+
+        CHECK(created.Successful());
+
+        //  Found by the name it was given, and by its generated 8.3 alias.
+
+        CHECK(root->GetDirectory(minstd::fixed_string<>("MY DIR")).Successful());
+        CHECK(root->GetDirectory(minstd::fixed_string<>("MYDIR~1")).Successful());
+
+        //  The space-less spelling is a different name, and is still free.
+
+        CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, root->GetDirectory(minstd::fixed_string<>("MYDIR")).ResultCode());
+        CHECK(root->CreateDirectory(minstd::fixed_string<>("MYDIR")).Successful());
+    }
+
+    TEST(FAT32DirectoryTest, PathsWithDotComponentsAreRejected)
+    {
+        CHECK_EQUAL(FilesystemResultCodes::ILLEGAL_PATH, test_fs.Filesystem().GetDirectory(minstd::fixed_string<>("/SUBDIR1/.")).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::ILLEGAL_PATH, test_fs.Filesystem().GetDirectory(minstd::fixed_string<>("/SUBDIR1/..")).ResultCode());
+    }
+
+    TEST(FAT32DirectoryTest, OutOfOrderLongNameRunFallsBackToTheShortName)
+    {
+        //  Lorem's long name is SUBDIR1 cluster 3 idx 11-13 (ordinals 0x43, 0x02, 0x01); its short
+        //      entry is idx 14.  Give the last LFN entry a wrong ordinal.
+
+        minstd::heap_buffer<uint8_t> raw(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(3), raw.data()));
+        CHECK_EQUAL(0x43, raw.data()[11 * 32]);
+        CHECK_EQUAL(0x01, raw.data()[13 * 32]);
+        raw.data()[13 * 32] = 0x02;
+        CHECK(test_fs.Adapter().WriteCluster(FAT32ClusterIndex(3), raw.data()) == BlockIOResultCodes::SUCCESS);
+
+        auto root = test_fs.RootDirectory();
+        auto subdir1 = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir1.Successful());
+
+        //  The broken run no longer names the file; its 8.3 alias still does.
+
+        CHECK_EQUAL(FilesystemResultCodes::FILE_NOT_FOUND,
+                    (*subdir1)->OpenFile(minstd::fixed_string<MAX_FILENAME_LENGTH>("Lorem ipsum dolor sit amet.text"), FileModes::READ).ResultCode());
+
+        auto by_alias = (*subdir1)->OpenFile(minstd::fixed_string<>("LOREMI~1.TEX"), FileModes::READ);
+
+        CHECK(by_alias.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*by_alias)->Close());
+    }
 }

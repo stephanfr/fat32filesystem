@@ -419,20 +419,36 @@ namespace filesystems::fat32
         //  Read the new entry back through the normal lookup: the iterator has to walk the LFN run
         //      to report the long name, and everything else must come from disk, not from memory.
 
-        auto new_entry = FindDirectoryEntry(FAT32DirectoryEntryAttributeToType(attributes), long_filename);
-
-        ReturnOnFailure(new_entry);
-
-        auto found_address = new_entry->AsEntryAddress();
-
-        ReturnOnFailure(found_address);
-
-        if ((found_address->Cluster() != new_entry_address->Cluster()) || (found_address->Index() != new_entry_address->Index()))
+        auto read_back = [&]() -> Result
         {
-            return Result::Failure(FilesystemResultCodes::FAT32_CURRENT_DIRECTORY_ENTRY_IS_INVALID);
+            auto new_entry = FindDirectoryEntry(FAT32DirectoryEntryAttributeToType(attributes), long_filename);
+
+            ReturnOnFailure(new_entry);
+
+            auto found_address = new_entry->AsEntryAddress();
+
+            ReturnOnFailure(found_address);
+
+            if ((found_address->Cluster() != new_entry_address->Cluster()) || (found_address->Index() != new_entry_address->Index()))
+            {
+                return Result::Failure(FilesystemResultCodes::FAT32_CURRENT_DIRECTORY_ENTRY_IS_INVALID);
+            }
+
+            return new_entry->AsDirectoryEntry();
+        };
+
+        auto new_entry = read_back();
+
+        //  The entry is already on disk.  If it cannot be read back, remove it again: callers roll back
+        //      their own state on failure - e.g. free a new directory's cluster - and must not leave an
+        //      entry pointing at it.  Best effort: the caller needs the original error.
+
+        if (new_entry.Failed())
+        {
+            RemoveEntry(*new_entry_address);
         }
 
-        return new_entry->AsDirectoryEntry();
+        return new_entry;
     }
 
     ValueResult<FilesystemResultCodes, FilesystemDirectoryEntry> FAT32DirectoryCluster::CreateEntry(const minstd::string &name,
@@ -1008,9 +1024,14 @@ namespace filesystems::fat32
 
             const FAT32DirectoryClusterEntry &entry = cluster_entry;
 
-            if (((type_filter & FilesystemDirectoryEntryType::VOLUME_INFORMATION) && entry.IsVolumeInformationEntry()) ||
-                ((type_filter & FilesystemDirectoryEntryType::DIRECTORY) && entry.IsDirectoryEntry()) ||
-                ((type_filter & FilesystemDirectoryEntryType::FILE) && entry.IsFileEntry()))
+            //  '.' and '..' link a directory to itself and to its parent - they are not names.
+
+            const bool dot_entry_looked_up_by_name = (name_filter != nullptr) && entry.IsDotEntry();
+
+            if (!dot_entry_looked_up_by_name &&
+                (((type_filter & FilesystemDirectoryEntryType::VOLUME_INFORMATION) && entry.IsVolumeInformationEntry()) ||
+                 ((type_filter & FilesystemDirectoryEntryType::DIRECTORY) && entry.IsDirectoryEntry()) ||
+                 ((type_filter & FilesystemDirectoryEntryType::FILE) && entry.IsFileEntry())))
             {
                 //  If we have a name to filter on, then check it, otherwise return success as we have a match.
                 //      We will preserve case in both 8.3 and long filenames but will test case insensitive for both as well.
@@ -1288,6 +1309,13 @@ namespace filesystems::fat32
             }
             else if (directory_entries_.ClusterEntry(current_entry_).IsLongFilenameEntry())
             {
+                //  Last in sequence (first in the run) resets the LFN run.
+                
+                if (directory_entries_.LFNEntry(current_entry_).IsFirstLFNEntry())
+                {
+                    ResetLFNRun();
+                }
+
                 AddLFNEntry(directory_entries_.LFNEntry(current_entry_));
             }
             else

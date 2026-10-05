@@ -457,4 +457,17 @@ namespace
         CHECK_FALSE(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>(" leading")).Successful());
         CHECK_FALSE(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>(".hidden")).Successful());
     }
+
+    TEST(FilesystemPathParser, DotAndDotDotComponentsAreIllegal)
+    {
+        CHECK_EQUAL(FilesystemResultCodes::ILLEGAL_PATH, FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/SUBDIR1/.")).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::ILLEGAL_PATH, FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/SUBDIR1/..")).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::ILLEGAL_PATH, FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/./SUBDIR1")).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::ILLEGAL_PATH, FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("SUBDIR1/../SUBDIR2")).ResultCode());
+
+        //  Names that merely contain periods are fine.
+
+        CHECK(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/SUBDIR1/a.b")).Successful());
+        CHECK(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/SUBDIR1/...x")).Successful());
+    }
 }

@@ -402,6 +402,17 @@ namespace filesystems::fat32
         }
 
         /**
+         * @brief Checks if the directory cluster entry is the '.' or '..' entry of a subdirectory,
+         *      other short names cannot begin with a period.
+         *
+         * @return true for '.' and '..', false otherwise.
+         */
+        bool IsDotEntry() const noexcept
+        {
+            return IsDirectoryEntry() && (compact_name_.name_[0] == '.');
+        }
+
+        /**
          * @brief Retrieves the type of the filesystem directory cluster entry.
          *
          * @return The type of the filesystem directory cluster entry.
@@ -667,6 +678,16 @@ namespace filesystems::fat32
         bool IsFirstLFNEntry() const noexcept
         {
             return ((sequence_number_.first_lfn_entry_ & 0x01) == 0x01);
+        }
+
+        /**
+         * @brief Returns the entry's ordinal within its long name: 1 for the entry next to the short entry.
+         *
+         * @return The ordinal, 1-20.
+         */
+        uint8_t SequenceNumber() const noexcept
+        {
+            return sequence_number_.sequence_number_;
         }
 
         /**
@@ -1430,11 +1451,21 @@ namespace filesystems::fat32
                 return false;
             }
 
+            //  A run names this entry only if it is complete and in order: it starts with the entry
+            //      flagged last-in-sequence (0x40) holding ordinal N = run length, counts down to 1, and
+            //      every entry carries this short name's checksum.
+
+            if ((next_lfn_entry_index_ > 0) && !lfn_entries_[0].IsFirstLFNEntry())
+            {
+                return false;
+            }
+
             const uint8_t checksum = entry.CompactName().Checksum();
 
             for (uint32_t i = 0; i < next_lfn_entry_index_; i++)
             {
-                if (lfn_entries_[i].FilenameChecksum() != checksum)
+                if ((lfn_entries_[i].FilenameChecksum() != checksum) ||
+                    (lfn_entries_[i].SequenceNumber() != (next_lfn_entry_index_ - i)))
                 {
                     return false;
                 }

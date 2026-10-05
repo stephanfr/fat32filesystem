@@ -541,7 +541,7 @@ namespace filesystems::fat32
                 }
 
                 wrapped = true;
-                current_cluster = static_cast<uint32_t>(root_directory_cluster_);
+                current_cluster = 2;
 
                 ReturnOnCallFailure(ReadFATBlock(FAT32ClusterIndex(current_cluster), current_fat));
 

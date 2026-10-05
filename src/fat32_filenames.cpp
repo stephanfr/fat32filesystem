@@ -53,6 +53,13 @@ namespace filesystems::fat32
     {
         numeric_tail_.reset();
 
+        //  A numeric tail requires at least two characters: one for the '~' and at least one digit.
+        
+        if (name_.length() < 2)
+        {
+            return;
+        }
+        
         //  Examine characters from the back of the filename moving to the front.  If all chars are
         //      numeric until we hit a '~' character, then there is a numeric tail.
 
@@ -203,7 +210,10 @@ namespace filesystems::fat32
 
         for (uint32_t i = 0; i < name_.size(); i++)
         {
-            if (islower(static_cast<unsigned char>(name_[i])) || (FAT32ShortFilename::FORBIDDEN_8_3_FILENAME_CHARACTERS.find(name_[i]) != minstd::string::npos))
+            const unsigned char current_char = static_cast<unsigned char>(name_[i]);
+
+            if (islower(current_char) || (current_char == ' ') ||
+                (FAT32ShortFilename::FORBIDDEN_8_3_FILENAME_CHARACTERS.find(name_[i]) != minstd::string::npos))
             {
                 return false;
             }

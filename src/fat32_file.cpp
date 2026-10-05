@@ -116,6 +116,13 @@ namespace filesystems::fat32
 
         LogEntryAndExit("Entering\n");
 
+        //  Insure the file is opened for read
+
+        if (!HasFileMode(mode_, FileModes::READ))
+        {
+            return FilesystemResultCodes::FILE_NOT_OPENED_FOR_READ;
+        }
+
         //  Get the filesystem entity
 
         auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);
@@ -233,6 +240,13 @@ namespace filesystems::fat32
             ReturnOnCallFailure(SeekEnd());
         }
 
+        //  A FAT32 file size is 32 bits, anything beyond that wraps and corrupts the file.
+
+        if ((static_cast<uint64_t>(byte_offset_into_file_) + buffer.size()) > 0xFFFFFFFFULL)
+        {
+            return FilesystemResultCodes::FILE_TOO_LARGE;
+        }
+
         //  Get the block io adapter from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
@@ -314,12 +328,12 @@ namespace filesystems::fat32
             //  There is still data to be written to the device, which means we need to move forward to the next
             //      cluster in the file -or- get a new cluster if we are at the end of the file.
 
-            if (byte_offset_into_file_ < directory_entry_.Size())
+            auto next_cluster = block_io_adapter.NextClusterInChain(current_cluster_);
+
+            ReturnOnFailure(next_cluster);
+
+            if (*next_cluster < FAT32EntryEOFThreshold)
             {
-                auto next_cluster = block_io_adapter.NextClusterInChain(current_cluster_);
-
-                ReturnOnFailure(next_cluster);
-
                 current_cluster_ = *next_cluster;
                 byte_offset_into_cluster_ = 0;
 

@@ -513,4 +513,16 @@ namespace
 
         CHECK_FALSE(FAT32LongFilename(".AB").Is8Dot3Filename(not_8_3));
     }
+
+    TEST(FAT32ShortFilename, BlankCompactNameHasNoTail)
+    {
+        //  A corrupt entry whose name field is all spaces.
+
+        FAT32Compact8Dot3Filename blank("        ", "   ");
+
+        FAT32ShortFilename short_filename(blank);
+
+        CHECK(short_filename.Name().empty());
+        CHECK_FALSE(short_filename.NumericTail().has_value());
+    }
 }

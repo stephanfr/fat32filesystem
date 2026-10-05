@@ -350,4 +350,133 @@ namespace
         CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(3), raw.data()));
         CHECK_EQUAL(0x20, raw.data()[attribute_offset]);
     }
+
+    TEST(FAT32FileTest, ReadOnlyFileCanBeReadButNotModifiedOrDeleted)
+    {
+        //  Set ATTR_READ_ONLY on Lorem's short entry (SUBDIR1 cluster 3 idx 14).
+
+        const uint32_t attribute_offset = (14 * 32) + 11;
+
+        minstd::heap_buffer<uint8_t> raw(__os_dynamic_heap_resource, test_fs.Adapter().BytesPerCluster());
+
+        CHECK(test_fs.ReadRawCluster(FAT32ClusterIndex(3), raw.data()));
+        raw.data()[attribute_offset] |= 0x01;
+        CHECK(test_fs.Adapter().WriteCluster(FAT32ClusterIndex(3), raw.data()) == BlockIOResultCodes::SUCCESS);
+
+        auto root = test_fs.RootDirectory();
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        minstd::fixed_string<MAX_FILENAME_LENGTH> name("Lorem ipsum dolor sit amet.text");
+
+        CHECK_EQUAL(FilesystemResultCodes::FILE_IS_READ_ONLY, (*subdir)->OpenFile(name, FileModes::WRITE).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::FILE_IS_READ_ONLY, (*subdir)->OpenFile(name, FileModes::APPEND).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::FILE_IS_READ_ONLY, (*subdir)->DeleteFile(name));
+
+        auto reader = (*subdir)->OpenFile(name, FileModes::READ);
+
+        CHECK(reader.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*reader)->Close());
+    }
+
+    TEST(FAT32FileTest, WriteThatWouldPassFourGiBIsRefused)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        auto reader = (*subdir)->OpenFile(minstd::fixed_string<MAX_FILENAME_LENGTH>("Lorem ipsum dolor sit amet.text"), FileModes::READ);
+
+        CHECK(reader.Successful());
+
+        auto entry = (*reader)->DirectoryEntry();
+
+        CHECK(entry.Successful());
+
+        //  A handle positioned 16 bytes short of the 32-bit limit: a 32-byte write must be refused
+        //      before anything reaches the disk.
+
+        FAT32File near_limit(test_fs.FilesystemUUID(), *entry, minstd::fixed_string<>("/SUBDIR1/near_limit"), FileModes::WRITE, 0, 0xFFFFFFF0);
+
+        minstd::heap_buffer<uint8_t> payload(__os_dynamic_heap_resource, 32);
+
+        FillBuffer(payload, 0xAB, 32);
+
+        CHECK_EQUAL(FilesystemResultCodes::FILE_TOO_LARGE, near_limit.Write(payload));
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*reader)->Close());
+    }
+
+    TEST(FAT32FileTest, WritePastSizeUsesClustersAlreadyInTheChain)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir3 = root->GetDirectory(minstd::fixed_string<>("SUBDIR3"));
+
+        CHECK(subdir3.Successful());
+
+        const uint32_t cluster_size = test_fs.Adapter().BytesPerCluster();
+
+        minstd::heap_buffer<uint8_t> one_cluster(__os_dynamic_heap_resource, cluster_size);
+
+        FillBuffer(one_cluster, 0x11, cluster_size);
+
+        auto writer = (*subdir3)->OpenFile(minstd::fixed_string<>("PREALLOC.BIN"), static_cast<FileModes>(FileModes::CREATE | FileModes::WRITE));
+
+        CHECK(writer.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*writer)->Write(one_cluster));
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*writer)->Close());
+
+        //  Find the file's only cluster, then preallocate a second one behind it, as another system might.
+
+        auto reader = (*subdir3)->OpenFile(minstd::fixed_string<>("PREALLOC.BIN"), FileModes::READ);
+
+        CHECK(reader.Successful());
+
+        auto entry = (*reader)->DirectoryEntry();
+
+        CHECK(entry.Successful());
+
+        const FAT32ClusterIndex first = GetOpaqueData(*entry).FirstCluster();
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*reader)->Close());
+
+        auto spare = test_fs.Adapter().FindNextEmptyCluster();
+
+        CHECK(spare.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, test_fs.Adapter().UpdateFATTableEntry(*spare, FAT32EntryAllocatedAndEndOfFile));
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, test_fs.Adapter().UpdateFATTableEntry(first, *spare));
+
+        //  Appending must continue into the preallocated cluster, not orphan it.
+
+        auto appender = (*subdir3)->OpenFile(minstd::fixed_string<>("PREALLOC.BIN"), FileModes::APPEND);
+
+        CHECK(appender.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*appender)->Write(one_cluster));
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*appender)->Close());
+
+        auto next = test_fs.Adapter().NextClusterInChain(first);
+
+        CHECK(next.Successful());
+        CHECK_EQUAL(static_cast<uint32_t>(*spare), static_cast<uint32_t>(*next));
+    }
+
+    TEST(FAT32FileTest, WriteOnlyHandlesCannotRead)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir.Successful());
+
+        auto writer = (*subdir)->OpenFile(minstd::fixed_string<MAX_FILENAME_LENGTH>("Lorem ipsum dolor sit amet.text"), FileModes::WRITE);
+
+        CHECK(writer.Successful());
+
+        minstd::heap_buffer<uint8_t> contents(__os_dynamic_heap_resource, 64);
+
+        CHECK_EQUAL(FilesystemResultCodes::FILE_NOT_OPENED_FOR_READ, (*writer)->Read(contents));
+        CHECK(contents.size() == 0);
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*writer)->Close());
+    }
 }
