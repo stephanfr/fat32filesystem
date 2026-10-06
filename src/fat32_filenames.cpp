@@ -19,11 +19,16 @@ namespace filesystems::fat32
 
     minstd::pair<char, bool> FAT32ShortFilename::GetPermissibleCharacter(const char current_char)
     {
-        if (isalpha(current_char))
+        const uint8_t byte = static_cast<uint8_t>(current_char);
+
+        //  Fold ASCII letters only.  Short names are in the OEM code page, where high-bit bytes
+        //      have no reliable case mapping; they pass through unchanged below.
+
+        if ((byte >= 'a') && (byte <= 'z'))
         {
-            return minstd::pair((char)toupper(current_char), false);
+            return minstd::pair(static_cast<char>(byte - ('a' - 'A')), false);
         }
-        else if (isspace(current_char) || (current_char == '.'))
+        else if (((byte < 0x80) && isspace(byte)) || (byte == '.'))
         {
             //  Document says strip all leading and embedded spaces - so I assume embedded includes trailing.
             //      Similarly, doc says strip leading periods but also do not copy any periods in the long filename
@@ -31,8 +36,8 @@ namespace filesystems::fat32
             return minstd::pair((char)0, false);
         }
         else if ((FORBIDDEN_8_3_FILENAME_CHARACTERS.find(current_char) == minstd::string::npos) &&
-                 (current_char > 31) &&
-                 (current_char != 127))
+                 (byte > 31) &&
+                 (byte != 127))
         {
             //  The current character is a permissible 8.3 filename character, so add it to the short filename
 
@@ -48,6 +53,13 @@ namespace filesystems::fat32
     {
         numeric_tail_.reset();
 
+        //  A numeric tail requires at least two characters: one for the '~' and at least one digit.
+        
+        if (name_.length() < 2)
+        {
+            return;
+        }
+        
         //  Examine characters from the back of the filename moving to the front.  If all chars are
         //      numeric until we hit a '~' character, then there is a numeric tail.
 
@@ -55,7 +67,7 @@ namespace filesystems::fat32
 
         for (front_of_number = name_.length() - 1; front_of_number > 0; front_of_number--)
         {
-            if (!isdigit(name_[front_of_number]))
+            if (!isdigit(static_cast<unsigned char>(name_[front_of_number])))
             {
                 break;
             }
@@ -198,7 +210,10 @@ namespace filesystems::fat32
 
         for (uint32_t i = 0; i < name_.size(); i++)
         {
-            if (islower(name_[i]) || (FAT32ShortFilename::FORBIDDEN_8_3_FILENAME_CHARACTERS.find(name_[i]) != minstd::string::npos))
+            const unsigned char current_char = static_cast<unsigned char>(name_[i]);
+
+            if (islower(current_char) || (current_char == ' ') ||
+                (FAT32ShortFilename::FORBIDDEN_8_3_FILENAME_CHARACTERS.find(name_[i]) != minstd::string::npos))
             {
                 return false;
             }
@@ -207,6 +222,13 @@ namespace filesystems::fat32
         //  Look for a period
 
         size_t extension_location = name_.find_last_of('.');
+
+        //  A name that starts with a period has an empty base, which no short name may have.
+
+        if (extension_location == 0)
+        {
+            return false;
+        }
 
         //  We know there are no illegal characters, the name is 8.3 if there are less than 8 characters in the name
 
@@ -263,7 +285,18 @@ namespace filesystems::fat32
         //  Find the start of the extension
 
         size_t extension_location = name_.find_last_of('.');
+        size_t first_non_period = 0;
 
+        while ((first_non_period < name_.size()) && (name_[first_non_period] == '.'))
+        {
+            first_non_period++;
+        }
+
+        if ((extension_location != minstd::string::npos) && (extension_location < first_non_period))
+        {
+            extension_location = minstd::string::npos;
+        }
+        
         //  Convert the long filename to uppercase
 
         for (uint32_t i = 0; i < minstd::min(name_.size(), extension_location) && short_filename.name_.size() < 8; i++)

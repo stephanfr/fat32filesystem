@@ -17,6 +17,8 @@
 
 #include "filesystem/fat32_blockio_adapter.h"
 #include "filesystem/fat32_filenames.h"
+#include "filesystem/fat32_date_time.h"
+
 
 namespace filesystems::fat32
 {
@@ -42,7 +44,10 @@ namespace filesystems::fat32
         FAT32DirectoryEntryAttributeDirectory = 0x10,
         FAT32DirectoryEntryAttributeArchive = 0x20,
 
-        FAT32DirectoryEntryAttributeLongFilename = FAT32DirectoryEntryAttributeReadOnly | FAT32DirectoryEntryAttributeHidden | FAT32DirectoryEntryAttributeSystem | FAT32DirectoryEntryAttributeVolumeId
+        FAT32DirectoryEntryAttributeLongFilename = FAT32DirectoryEntryAttributeReadOnly | FAT32DirectoryEntryAttributeHidden | FAT32DirectoryEntryAttributeSystem | FAT32DirectoryEntryAttributeVolumeId,
+
+        //  The top two attribute bits are reserved: an LFN entry is identified with them masked off.
+        FAT32DirectoryEntryAttributeLongFilenameMask = 0x3F
     } FAT32DirectoryAttributeFlags;
 
     /**
@@ -153,265 +158,6 @@ namespace filesystems::fat32
         FAT32ClusterIndex cluster_;
         uint32_t index_;
     };
-
-    //
-    //  FAT32 Dates and Times
-    //
-
-    /**
-     * @class FAT32Date
-     * @brief Represents a date in the FAT32 file system format.
-     *
-     * The FAT32Date class provides methods to manipulate and retrieve date information in the FAT32 file system format.
-     * It stores the year, month, and day as separate fields and provides methods to access and convert the date to the FAT32 format.
-     */
-    class FAT32Date
-    {
-    public:
-        FAT32Date() = delete;
-        FAT32Date(FAT32Date &&fat32_date) = delete;
-
-        /**
-         * @brief Constructs a FAT32Date object with the specified year, month, and day.
-         *
-         * @param year The year value. Must be greater than or equal to 1980.
-         * @param month The month value. Must be between 1 and 12 (inclusive).
-         * @param day The day value. Must be between 1 and 31 (inclusive).
-         */
-        FAT32Date(int year, int month, int day)
-            : year_(minstd::min(minstd::max(0, year - 1980), 127)),
-              month_(minstd::min(minstd::max(month, 1), 12)),
-              day_(minstd::min(minstd::max(day, 1), 31))
-        {
-        }
-
-        /**
-         * @brief Copy constructor for FAT32Date.
-         *
-         * This constructor creates a new FAT32Date object by copying the values from another FAT32Date object.
-         *
-         * @param fat32_date The FAT32Date object to be copied.
-         */
-        FAT32Date(const FAT32Date &fat32_date) = default;
-
-        /**
-         * @brief Assignment operator for FAT32Date.
-         *
-         * This operator assigns the values of another FAT32Date object to the current object.
-         *
-         * @param fat32_date The FAT32Date object to copy from.
-         * @return A reference to the current object after assignment.
-         */
-        FAT32Date &operator=(const FAT32Date &fat32_date) = default;
-
-        FAT32Date &operator=(FAT32Date &&fat32_date) = delete;
-
-        /**
-         * @brief Returns the year value of the date.
-         *
-         * @return The year value of the date.
-         */
-        uint16_t Year() const noexcept
-        {
-            return year_ + 1980;
-        }
-
-        /**
-         * @brief Returns the month value of the date.
-         *
-         * @return The month value of the date.
-         */
-        uint16_t Month() const noexcept
-        {
-            return month_;
-        }
-
-        /**
-         * Retrieves the day value of the date.
-         *
-         * @return The day value of the date.
-         */
-        uint16_t Day() const noexcept
-        {
-            return day_;
-        }
-
-        /**
-         * @brief Converts the date to FAT32 format.
-         *
-         * @return The date in FAT32 format.
-         */
-        uint16_t ToFAT32Date() const noexcept
-        {
-            return fat32_date_;
-        }
-
-    private:
-        union
-        {
-            uint16_t fat32_date_;
-            struct
-            {
-                uint16_t year_ : 7;  //  0-127 (1980-2107)
-                uint16_t month_ : 4; //  1-12
-                uint16_t day_ : 5;   //  1-31
-            } PACKED;
-        } PACKED;
-    } PACKED;
-
-    /**
-     * @class FAT32Time
-     * @brief Represents a time value in the FAT32 file system.
-     *
-     * The FAT32Time class provides a way to store and manipulate time values in the FAT32 file system.
-     * It supports hours, minutes, and seconds with a resolution of 2 seconds.
-     *
-     * The time values are stored in a packed union, so they map directly to the cluster layout.
-     * The hours range from 0 to 23, the minutes range from 0 to 59, and the seconds range from 0 to 29 (0 to 59 in actual time).
-     *
-     * This class is used in the FAT32 directory cluster to represent the creation, modification, and access times of files and directories.
-     */
-    class FAT32Time
-    {
-    public:
-        FAT32Time() = delete;
-        FAT32Time(FAT32Time &&fat32_time) = delete;
-
-        /**
-         * @brief Constructs a FAT32Time object with the specified hours, minutes, and seconds.
-         *
-         * @param hours The hours value for the time (0-23).
-         * @param minutes The minutes value for the time (0-59).
-         * @param seconds The seconds value for the time (0-59, multiples of 2).
-         */
-        FAT32Time(int hours, int minutes, int seconds)
-            : hours_(minstd::min(minstd::max(hours, 0), 23)),
-              minutes_(minstd::min(minstd::max(minutes, 0), 59)),
-              seconds_(minstd::min(minstd::max(seconds / 2, 0), 29))
-        {
-        }
-
-        /**
-         * @brief Constructs a FAT32Time object by copying another FAT32Time object.
-         *
-         * @param fat32_time The FAT32Time object to be copied.
-         */
-        FAT32Time(const FAT32Time &fat32_time) = default;
-
-        /**
-         * @brief Assignment operator for FAT32Time objects.
-         *
-         * This operator assigns the values of the given FAT32Time object to the current object.
-         *
-         * @param fat32_time The FAT32Time object to be assigned.
-         * @return A reference to the current FAT32Time object after assignment.
-         */
-        FAT32Time &operator=(const FAT32Time &fat32_time) = default;
-
-        FAT32Time &operator=(FAT32Time &&fat32_time) = delete;
-
-        /**
-         * Returns the hours component of the time.
-         *
-         * @return The hours component of the time.
-         */
-        uint16_t Hours() const noexcept
-        {
-            return hours_;
-        }
-
-        /**
-         * @brief Returns the number of minutes.
-         *
-         * @return The number of minutes.
-         */
-        uint16_t Minutes() const noexcept
-        {
-            return minutes_;
-        }
-
-        /**
-         * @brief Returns the number of seconds.
-         *
-         * @return The number of seconds.
-         */
-        uint16_t Seconds() const noexcept
-        {
-            return seconds_ * 2;
-        }
-
-    private:
-        union
-        {
-            uint16_t fat32_time_;
-            struct
-            {
-                uint16_t hours_ : 5;   //  0-23
-                uint16_t minutes_ : 6; //  0-59
-                uint16_t seconds_ : 5; //  0-29 (0-59)
-            } PACKED;
-        } PACKED;
-    } PACKED;
-
-    /**
-     * @class FAT32TimeHundredths
-     * @brief Represents the hundredths of a second in a FAT32 time value.
-     *
-     * This class provides a representation of the hundredths of a second in a FAT32 time value.
-     * It is used to store and manipulate the hundredths component of a time value.
-     *
-     * The range of valid values for the hundredths component is from 0 to 199 so it can store two seconds of time.
-     *
-     * @note This class is not meant to be instantiated directly. Use the provided constructors and assignment operators.
-     */
-    class FAT32TimeHundredths
-    {
-    public:
-        FAT32TimeHundredths() = delete;
-        FAT32TimeHundredths(FAT32TimeHundredths &&fat32_time_hundredths) = delete;
-
-        /**
-         * @brief Constructs a FAT32TimeHundredths object with the specified hundredths value.
-         *
-         * @param hundredths The hundredths value to be set. Must be between 0 and 199 (inclusive).
-         */
-        FAT32TimeHundredths(int hundredths)
-            : hundredths_(minstd::min(minstd::max(hundredths, 0), 199))
-        {
-        }
-
-        /**
-         * @brief Copy constructor for FAT32TimeHundredths.
-         *
-         * @param fat32_time_hundredths The FAT32TimeHundredths object to be copied.
-         */
-        FAT32TimeHundredths(const FAT32TimeHundredths &fat32_time_hundredths) = default;
-
-        /**
-         * @brief Assignment operator for FAT32TimeHundredths.
-         *
-         * This operator assigns the value of another FAT32TimeHundredths object to the current object.
-         *
-         * @param fat32_time_hundredths The FAT32TimeHundredths object to be assigned.
-         * @return Reference to the current FAT32TimeHundredths object after assignment.
-         */
-        FAT32TimeHundredths &operator=(const FAT32TimeHundredths &fat32_time_hundredths) = default;
-
-        FAT32TimeHundredths &operator=(FAT32TimeHundredths &&fat32_time_hundredths) = delete;
-
-        /**
-         * @brief Returns the value of the Hundredths field.
-         *
-         * @return The value of the Hundredths field.
-         */
-        uint16_t Hundredths() const noexcept
-        {
-            return hundredths_;
-        }
-
-    private:
-        uint8_t hundredths_;
-    } PACKED;
 
     //
     //  Directory Entry - should be 32 bytes long for FAT32
@@ -561,7 +307,7 @@ namespace filesystems::fat32
          */
         void SetDirectoryEntryFlag(FAT32DirectoryEntryFlags flag)
         {
-            const_cast<char &>(compact_name_.name_[0]) = static_cast<char>(flag);
+            compact_name_.name_[0] = static_cast<char>(flag);
         }
 
         /**
@@ -602,7 +348,7 @@ namespace filesystems::fat32
          */
         bool IsStandardEntry() const noexcept
         {
-            return (IsInUse() && (attributes_ != FAT32DirectoryEntryAttributeLongFilename));
+            return (IsInUse() && ((attributes_ & FAT32DirectoryEntryAttributeLongFilenameMask) != FAT32DirectoryEntryAttributeLongFilename));
         }
 
         /**
@@ -612,7 +358,7 @@ namespace filesystems::fat32
          */
         bool IsLongFilenameEntry() const noexcept
         {
-            return (IsInUse() && (attributes_ == FAT32DirectoryEntryAttributeLongFilename));
+            return (IsInUse() && ((attributes_ & FAT32DirectoryEntryAttributeLongFilenameMask) == FAT32DirectoryEntryAttributeLongFilename));
         }
 
         /**
@@ -632,7 +378,7 @@ namespace filesystems::fat32
          */
         bool IsVolumeInformationEntry() const noexcept
         {
-            return (IsInUse() && (attributes_ & FAT32DirectoryEntryAttributeVolumeId));
+            return (IsStandardEntry() && ((attributes_ & (FAT32DirectoryEntryAttributeDirectory | FAT32DirectoryEntryAttributeVolumeId)) == FAT32DirectoryEntryAttributeVolumeId));
         }
 
         /**
@@ -642,7 +388,7 @@ namespace filesystems::fat32
          */
         bool IsDirectoryEntry() const noexcept
         {
-            return (IsInUse() && (attributes_ & FAT32DirectoryEntryAttributeDirectory));
+            return (IsStandardEntry() && ((attributes_ & (FAT32DirectoryEntryAttributeDirectory | FAT32DirectoryEntryAttributeVolumeId)) == FAT32DirectoryEntryAttributeDirectory));
         }
 
         /**
@@ -652,8 +398,18 @@ namespace filesystems::fat32
          */
         bool IsFileEntry() const noexcept
         {
-            return (IsInUse() &&
-                    !(attributes_ & (FAT32DirectoryEntryAttributeDirectory | FAT32DirectoryEntryAttributeVolumeId | FAT32DirectoryEntryAttributeSystem)));
+            return (IsStandardEntry() && ((attributes_ & (FAT32DirectoryEntryAttributeDirectory | FAT32DirectoryEntryAttributeVolumeId)) == 0));
+        }
+
+        /**
+         * @brief Checks if the directory cluster entry is the '.' or '..' entry of a subdirectory,
+         *      other short names cannot begin with a period.
+         *
+         * @return true for '.' and '..', false otherwise.
+         */
+        bool IsDotEntry() const noexcept
+        {
+            return IsDirectoryEntry() && (compact_name_.name_[0] == '.');
         }
 
         /**
@@ -781,6 +537,14 @@ namespace filesystems::fat32
         }
 
         /**
+         * @brief Marks the entry as modified since it was last backed up (ATTR_ARCHIVE).
+         */
+        void SetArchive() noexcept
+        {
+            attributes_ |= FAT32DirectoryEntryAttributeArchive;
+        }
+
+        /**
          * @brief Returns the short filename for the object referenced by the directory cluster entry
          *
          * @param short_filename SIDE EFFECT The object to store the converted short filename.
@@ -825,6 +589,16 @@ namespace filesystems::fat32
     } PACKED;
 
     static_assert(sizeof(FAT32DirectoryClusterEntry) == 32);
+    static_assert(sizeof(FAT32Compact8Dot3Filename) == 11);
+
+    /**
+     * @brief True if the address's index lies inside one directory cluster on this volume.  Every
+     *        function that indexes a cluster buffer by an entry address must check this first.
+     */
+    inline bool IsEntryIndexInCluster(const FAT32BlockIOAdapter &block_io_adapter, const FAT32DirectoryEntryAddress &address)
+    {
+        return address.Index() < (block_io_adapter.BytesPerCluster() / sizeof(FAT32DirectoryClusterEntry));
+    }
 
     /**
      * @class FAT32LongFilenameClusterEntry
@@ -904,6 +678,26 @@ namespace filesystems::fat32
         bool IsFirstLFNEntry() const noexcept
         {
             return ((sequence_number_.first_lfn_entry_ & 0x01) == 0x01);
+        }
+
+        /**
+         * @brief Returns the entry's ordinal within its long name: 1 for the entry next to the short entry.
+         *
+         * @return The ordinal, 1-20.
+         */
+        uint8_t SequenceNumber() const noexcept
+        {
+            return sequence_number_.sequence_number_;
+        }
+
+        /**
+         * @brief Retrieves the filename checksum for the current long filename entry.
+         *
+         * @return The filename checksum.
+         */
+        uint8_t FilenameChecksum() const noexcept
+        {
+            return filename_checksum_;
         }
 
         /**
@@ -1077,7 +871,7 @@ namespace filesystems::fat32
         FAT32DirectoryClusterEntry directory_entry_;
     };
 
-    static_assert(sizeof(FAT32DirectoryEntryOpaqueData) < FilesystemDirectoryEntry::OPAQUE_DATA_BLOCK_SIZE_IN_BYTES);
+    static_assert(sizeof(FAT32DirectoryEntryOpaqueData) <= FilesystemDirectoryEntry::OPAQUE_DATA_BLOCK_SIZE_IN_BYTES);
 
     /**
      * @brief Retrieves the opaque data of a FAT32 directory entry.
@@ -1137,10 +931,24 @@ namespace filesystems::fat32
          * @brief Moves the current directory to the specified FAT32 directory cluster.
          *
          * @param new_directory_first_cluster The first cluster of the new directory.
+         * @return FAT32_CLUSTER_OUT_OF_RANGE if the cluster is not a data cluster on this volume,
+         *         in which case the current directory is unchanged.
          */
-        void MoveToDirectory(FAT32ClusterIndex new_directory_first_cluster)
+        FilesystemResultCodes MoveToDirectory(FAT32ClusterIndex new_directory_first_cluster)
         {
+            //  A directory's first cluster must be a data cluster.  0 and 1 are reserved, and
+            //      anything past the end of the volume (including the end-of-chain markers that
+            //      IsClusterOutOfRange() deliberately accepts) means the entry is corrupt.
+
+            if ((new_directory_first_cluster < FAT32ClusterIndex(2)) ||
+                (new_directory_first_cluster > block_io_adapter_.MaximumClusterNumber()))
+            {
+                return FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE;
+            }
+
             first_cluster_ = new_directory_first_cluster;
+
+            return FilesystemResultCodes::SUCCESS;
         }
 
         /**
@@ -1253,6 +1061,13 @@ namespace filesystems::fat32
 
         const uint32_t entries_per_cluster_;
 
+        static constexpr uint32_t MAX_DIRECTORY_ENTRIES = 65536;            //  The specification limits a directory to 65,536 entries (2 MB).
+
+        uint32_t MaximumDirectoryClusters() const noexcept
+        {
+            return MAX_DIRECTORY_ENTRIES / entries_per_cluster_;
+        }
+
         //
         //  Private methods
         //
@@ -1289,10 +1104,18 @@ namespace filesystems::fat32
          *
          * @param cluster_entry The FAT32 directory cluster entry to write.
          * @param lfn_entries The vector of FAT32 long filename cluster entries to write.
-         * @return A ValueResult object containing the result code and the written directory entry.
+         * @return A ValueResult object containing the result code and the written directory entry address.
          */
-        ValueResult<FilesystemResultCodes, FilesystemDirectoryEntry> WriteLFNSequenceAndClusterEntry(const FAT32DirectoryClusterEntry &cluster_entry,
-                                                                                                     const minstd::vector<FAT32LongFilenameClusterEntry> &lfn_entries);
+        ValueResult<FilesystemResultCodes, FAT32DirectoryEntryAddress> WriteLFNSequenceAndClusterEntry(const FAT32DirectoryClusterEntry &cluster_entry,
+                                                                                                       const minstd::vector<FAT32LongFilenameClusterEntry> &lfn_entries);
+
+        /**
+         * @brief Checks if a given name is already in use within the directory cluster.
+         *
+         * @param name The name to check for usage.
+         * @return A ValueResult object containing the result code and a boolean indicating if the name is in use.
+         */
+        ValueResult<FilesystemResultCodes, bool> IsNameInUse(const char *name);
     };
 
     /**
@@ -1326,6 +1149,8 @@ namespace filesystems::fat32
 
         FAT32DirectoryClusterTable directory_entries_;
 
+        uint32_t clusters_visited_ = 1;
+
         /**
          * @brief Constructs an iterator base object.
          *
@@ -1349,6 +1174,37 @@ namespace filesystems::fat32
         {
         }
 
+        /**
+         * @brief Copy constructor for the iterator base.
+         *
+         * These iterators are returned by value through ValueResult constantly, so they get
+         * copied.  Each copy must own its own cluster buffer:
+         *
+         *  - buffer_ is NOT copy-constructed.  minstd::heap_buffer has no copy constructor of
+         *    its own, so the implicit one duplicates the pointer - both iterators would then
+         *    read the same block, and both destructors would free it.
+         *
+         *  - The cluster is read straight into buffer_.data(), which never advances the
+         *    buffer's logical size, so the whole cluster is copied explicitly.
+         *
+         *  - directory_entries_ is a cached pointer into buffer_, so it is pointed at the new
+         *    block rather than copied from the source.
+         *
+         * @param itr_to_copy The iterator to copy from.
+         */
+
+        iterator_base(const iterator_base &itr_to_copy)
+            : directory_cluster_(itr_to_copy.directory_cluster_),
+              location_(itr_to_copy.location_),
+              buffer_(__os_dynamic_heap_resource, itr_to_copy.directory_cluster_.block_io_adapter_.BytesPerCluster()),
+              buffer_is_empty_(itr_to_copy.buffer_is_empty_),
+              current_entry_(itr_to_copy.current_entry_),
+              directory_entries_(buffer_.data()),
+              clusters_visited_(itr_to_copy.clusters_visited_)
+        {
+            memcpy(buffer_.data(), itr_to_copy.buffer_.data(), directory_cluster_.block_io_adapter_.BytesPerCluster());
+        }
+        
         /**
          * Advances the current entry in the FAT32 directory cluster.
          *
@@ -1529,8 +1385,11 @@ namespace filesystems::fat32
         friend class test::FAT32DirectoryClusterDirectoryEntryIteratorHelper;
 #endif
 
-        FAT32LongFilenameClusterEntry lfn_entries_[22];
+        static constexpr uint32_t MAX_LFN_ENTRIES = 20;
+
+        FAT32LongFilenameClusterEntry lfn_entries_[MAX_LFN_ENTRIES];
         uint32_t next_lfn_entry_index_ = 0;
+        bool lfn_run_overflowed_ = false;
 
         /**
          * @brief Constructor for the directory entry iterator.
@@ -1569,10 +1428,50 @@ namespace filesystems::fat32
          */
         void AddLFNEntry(const FAT32LongFilenameClusterEntry &entry)
         {
-            if (next_lfn_entry_index_ < 21)
+            if (next_lfn_entry_index_ < MAX_LFN_ENTRIES)
             {
                 memcpy(lfn_entries_ + next_lfn_entry_index_++, &entry, sizeof(FAT32LongFilenameClusterEntry));
             }
+            else
+            {
+                lfn_run_overflowed_ = true;
+            }
+        }
+
+        void ResetLFNRun() noexcept
+        {
+            next_lfn_entry_index_ = 0;
+            lfn_run_overflowed_ = false;
+        }
+
+        bool LFNRunBelongsTo(const FAT32DirectoryClusterEntry &entry) const noexcept
+        {
+            if (lfn_run_overflowed_)
+            {
+                return false;
+            }
+
+            //  A run names this entry only if it is complete and in order: it starts with the entry
+            //      flagged last-in-sequence (0x40) holding ordinal N = run length, counts down to 1, and
+            //      every entry carries this short name's checksum.
+
+            if ((next_lfn_entry_index_ > 0) && !lfn_entries_[0].IsFirstLFNEntry())
+            {
+                return false;
+            }
+
+            const uint8_t checksum = entry.CompactName().Checksum();
+
+            for (uint32_t i = 0; i < next_lfn_entry_index_; i++)
+            {
+                if ((lfn_entries_[i].FilenameChecksum() != checksum) ||
+                    (lfn_entries_[i].SequenceNumber() != (next_lfn_entry_index_ - i)))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /**

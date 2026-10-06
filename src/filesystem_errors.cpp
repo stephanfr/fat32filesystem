@@ -7,7 +7,7 @@
 namespace filesystems
 {
 
-    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 40);
+    static_assert((uint32_t)FilesystemResultCodes::__END_OF_FILESYSTEM_RESULT_CODES__ == 46);
 
     const char *ErrorMessage(FilesystemResultCodes code)
     {
@@ -70,11 +70,26 @@ namespace filesystems
         case FilesystemResultCodes::FILE_NOT_OPENED_FOR_READ:
             return "File not opened for Read";
 
+        case FilesystemResultCodes::FILE_NOT_OPENED_FOR_WRITE:
+            return "File not opened for Write";
+
         case FilesystemResultCodes::FILE_NOT_OPENED_FOR_APPEND:
             return "File not opened for Append";
 
+        case FilesystemResultCodes::FILE_IS_READ_ONLY:
+            return "File is read-only";
+
+        case FilesystemResultCodes::FILE_TOO_LARGE:
+            return "File would exceed the FAT32 maximum size of 4 GiB - 1 byte";
+
         case FilesystemResultCodes::ROOT_DIRECTORY_CANNOT_BE_REMOVED:
             return "Root directory cannot be removed";
+
+        case FilesystemResultCodes::DIRECTORY_NOT_EMPTY:
+            return "Directory is not empty";
+
+        case FilesystemResultCodes::DIRECTORY_HANDLE_IS_STALE:
+            return "Directory handle is stale - the directory was renamed or removed";
 
         case FilesystemResultCodes::FILE_ALREADY_OPENED_EXCLUSIVELY:
             return "File already opened exclusively";
@@ -132,6 +147,9 @@ namespace filesystems
 
         case FilesystemResultCodes::FAT32_CLUSTER_NOT_PRESENT_IN_CHAIN:
             return "FAT32: Cluster not present in chain";
+
+        case FilesystemResultCodes::FAT32_CLUSTER_CHAIN_IS_CORRUPT:
+            return "FAT32: Cluster chain is corrupt";
 
         default:
             return "Missing message";

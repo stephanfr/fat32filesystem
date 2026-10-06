@@ -14,25 +14,17 @@
 #undef EOF
 #include <stdio.h>
 
-//  Stub out some of the synchronization functions
 
-UUID GetCurrentTaskId(void)
+//  The tests run as one task, owner 1.  A test may briefly pose as another task.
+
+uintptr_t g_test_task_owner_id = 1;
+
+uintptr_t GetCurrentTaskOwnerId() noexcept
 {
-    return UUID::GenerateUUID(UUID::Versions::RANDOM);
+    return g_test_task_owner_id;
 }
 
-extern "C"
-{
-    void LockSpinLock(void *spinlock)
-    {
-    }
-
-    void UnlockSpinLock(void *spinlock)
-    {
-    }
-}
-
-//  To initialize SW RNGs
+//  Initialize SW RNGs
 
 extern void InitializeSWRandomNumberGenerators(MurmurHash64ASeed os_entity_hash_seed,
                                                minstd::xoroshiro128_plus_plus::seed_type xoroshiro_seed);
@@ -44,12 +36,14 @@ extern void InitializeSWRandomNumberGenerators(MurmurHash64ASeed os_entity_hash_
 #define TEST_STATIC_HEAP_SIZE BYTES_4M
 #define TEST_DYNAMIC_HEAP_SIZE 256 * BYTES_1M
 
-static char static_heap_buffer[TEST_STATIC_HEAP_SIZE];
-static char dynamic_heap_buffer[TEST_DYNAMIC_HEAP_SIZE];
+#define TEST_HEAP_ALIGNMENT 16
 
-minstd::single_block_memory_heap __os_static_heap_core(static_heap_buffer, TEST_STATIC_HEAP_SIZE, 4);
+alignas(TEST_HEAP_ALIGNMENT) static char static_heap_buffer[TEST_STATIC_HEAP_SIZE];
+alignas(TEST_HEAP_ALIGNMENT) static char dynamic_heap_buffer[TEST_DYNAMIC_HEAP_SIZE];
 
-minstd::single_block_memory_heap __os_dynamic_heap_core(dynamic_heap_buffer, TEST_DYNAMIC_HEAP_SIZE, 4);
+minstd::single_block_memory_heap __os_static_heap_core(static_heap_buffer, TEST_STATIC_HEAP_SIZE, TEST_HEAP_ALIGNMENT);
+
+minstd::single_block_memory_heap __os_dynamic_heap_core(dynamic_heap_buffer, TEST_DYNAMIC_HEAP_SIZE, TEST_HEAP_ALIGNMENT);
 
 minstd::pmr::memory_heap_resource_adapter __os_static_heap_resource_core(__os_static_heap_core);
 minstd::pmr::memory_heap_resource_adapter __os_dynamic_heap_resource_core(__os_dynamic_heap_core);

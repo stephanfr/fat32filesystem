@@ -24,16 +24,16 @@ namespace filesystems::fat32
 
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(filesystem_uuid_);
+        auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
         }
 
-        //  Get the block io adapter from the filesystem
+        FAT32Filesystem &filesystem = *locked_filesystem;
 
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        //  Get the block io adapter from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
@@ -116,24 +116,32 @@ namespace filesystems::fat32
 
         LogEntryAndExit("Entering\n");
 
+        //  Insure the file is opened for read
+
+        if (!HasFileMode(mode_, FileModes::READ))
+        {
+            return FilesystemResultCodes::FILE_NOT_OPENED_FOR_READ;
+        }
+
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(filesystem_uuid_);
+        auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
         }
 
-        //  Get the block io adapter from the filesystem
+        FAT32Filesystem &filesystem = *locked_filesystem;
 
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        //  Get the block io adapter from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
         //  Create a read buffer
 
-        uint8_t block_buffer[block_io_adapter.BytesPerCluster()];
+        minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter.BytesPerCluster());
+        uint8_t *block_buffer = cluster_buffer.data();
         uint32_t bytes_in_block = block_io_adapter.BytesPerCluster();
 
         //  If the current cluster is zero, then we have an empty file and there is nothing to read
@@ -199,18 +207,47 @@ namespace filesystems::fat32
     {
         using Result = FilesystemResultCodes;
 
+        //  Insure the file is opened for write
+
+        if (!HasFileMode(mode_, FileModes::WRITE) && !HasFileMode(mode_, FileModes::APPEND))
+        {
+            return FilesystemResultCodes::FILE_NOT_OPENED_FOR_WRITE;
+        }
+
+        //  Nothing to write: in particular, do not give an empty file a cluster - a 0-byte file
+        //      must have first cluster 0.
+
+        if (buffer.size() == 0)
+        {
+            return FilesystemResultCodes::SUCCESS;
+        }
+
         //  Get the filesystem entity
 
-        auto get_filesystem_result = GetOSEntityRegistry().GetEntityById(filesystem_uuid_);
+        auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);
 
-        if (!get_filesystem_result.Successful())
+        if (!locked_filesystem)
         {
             return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
         }
 
-        //  Get the block io adapter from the filesystem
+        FAT32Filesystem &filesystem = *locked_filesystem;
 
-        FAT32Filesystem &filesystem = get_filesystem_result;
+        //  An append-mode handle always writes at the end of the file.
+
+        if (HasFileMode(mode_, FileModes::APPEND))
+        {
+            ReturnOnCallFailure(SeekEnd());
+        }
+
+        //  A FAT32 file size is 32 bits, anything beyond that wraps and corrupts the file.
+
+        if ((static_cast<uint64_t>(byte_offset_into_file_) + buffer.size()) > 0xFFFFFFFFULL)
+        {
+            return FilesystemResultCodes::FILE_TOO_LARGE;
+        }
+
+        //  Get the block io adapter from the filesystem
 
         FAT32BlockIOAdapter &block_io_adapter = filesystem.BlockIOAdapter();
 
@@ -237,9 +274,10 @@ namespace filesystems::fat32
             current_cluster_ = *new_cluster_index;
         }
 
-        //  Allocate a buffer for the cluster on the stack.
+        //  Allocate a buffer for the cluster
 
-        uint8_t block_buffer[block_io_adapter.BytesPerCluster()];
+        minstd::heap_buffer<uint8_t> cluster_buffer(__os_dynamic_heap_resource, block_io_adapter.BytesPerCluster());
+        uint8_t *block_buffer = cluster_buffer.data();
 
         //  Start tracking the offset into the write buffer
 
@@ -247,22 +285,21 @@ namespace filesystems::fat32
 
         while (offset_into_buffer < buffer.size())
         {
-            //  If we have data already written into this cluster, then read it so we can append.
+            uint32_t bytes_left_in_cluster = block_io_adapter.BytesPerCluster() - byte_offset_into_cluster_;
+            uint32_t bytes_to_copy = minstd::min(bytes_left_in_cluster, (uint32_t)buffer.size() - offset_into_buffer);
 
-            if (byte_offset_into_cluster_ > 0)
+            //  The whole cluster is written back below, so unless every byte of it is being replaced it must be read first.
+
+            const bool overwrites_whole_cluster = (byte_offset_into_cluster_ == 0) &&
+                                                  (bytes_to_copy == block_io_adapter.BytesPerCluster());
+
+            if (!overwrites_whole_cluster)
             {
-                BlockIOResultCodes read_block_result = block_io_adapter.ReadCluster(current_cluster_, block_buffer);
-
-                if (read_block_result != BlockIOResultCodes::SUCCESS)
+                if (block_io_adapter.ReadCluster(current_cluster_, block_buffer) != BlockIOResultCodes::SUCCESS)
                 {
                     return FilesystemResultCodes::FAT32_DEVICE_READ_ERROR;
                 }
             }
-
-            //  Append from the buffer to the cluster, then write the cluster.
-
-            uint32_t bytes_left_in_cluster = block_io_adapter.BytesPerCluster() - byte_offset_into_cluster_;
-            uint32_t bytes_to_copy = minstd::min(bytes_left_in_cluster, (uint32_t)buffer.size() - offset_into_buffer);
 
             memcpy(block_buffer + byte_offset_into_cluster_, (char *)buffer.data() + offset_into_buffer, bytes_to_copy);
 
@@ -291,12 +328,12 @@ namespace filesystems::fat32
             //  There is still data to be written to the device, which means we need to move forward to the next
             //      cluster in the file -or- get a new cluster if we are at the end of the file.
 
-            if (byte_offset_into_file_ < directory_entry_.Size())
+            auto next_cluster = block_io_adapter.NextClusterInChain(current_cluster_);
+
+            ReturnOnFailure(next_cluster);
+
+            if (*next_cluster < FAT32EntryEOFThreshold)
             {
-                auto next_cluster = block_io_adapter.NextClusterInChain(current_cluster_);
-
-                ReturnOnFailure(next_cluster);
-
                 current_cluster_ = *next_cluster;
                 byte_offset_into_cluster_ = 0;
 
@@ -305,37 +342,55 @@ namespace filesystems::fat32
 
             //  OK, we have filled the existing file storage so we need a new cluster to continue.
             //
-            //  Get the next empty cluster, then link the previous final cluster to the next cluster and then mark the new
-            //      cluster as the last cluster in the file.
+            //  Get the next empty cluster and claim it as the new end of the file, then link the previous final
+            //      cluster to it.  Claiming first means the chain never points at a free cluster.
 
             auto next_empty_cluster = block_io_adapter.FindNextEmptyCluster(current_cluster_ + 1);
 
             ReturnOnFailure(next_empty_cluster);
 
-            ReturnOnCallFailure(block_io_adapter.UpdateFATTableEntry(current_cluster_, *next_empty_cluster));
             ReturnOnCallFailure(block_io_adapter.UpdateFATTableEntry(*next_empty_cluster, FAT32EntryAllocatedAndEndOfFile));
 
+            const FilesystemResultCodes link_result = block_io_adapter.UpdateFATTableEntry(current_cluster_, *next_empty_cluster);
+
+            if (link_result != FilesystemResultCodes::SUCCESS)
+            {
+                //  Release the unlinked cluster.  The rollback is best effort: the caller needs the
+                //      original failure, not the rollback's.
+
+                block_io_adapter.UpdateFATTableEntry(*next_empty_cluster, FAT32EntryFree);
+
+                return link_result;
+            }
+            
             //  Move to the next cluster and reset the offset into the cluster to zero.
 
             current_cluster_ = *next_empty_cluster;
             byte_offset_into_cluster_ = 0;
         }
 
-        //  Finally, update the directory entry.
-        //      We need to update the directory entry saved with the file and also the entry on the disk.
+        //  Finally, update the directory entry, in memory and on disk: the size if the file grew, and
+        //      ATTR_ARCHIVE the first time this handle modifies the file - even if the size is unchanged.
 
-        if (byte_offset_into_file_ > directory_entry_.Size())
+        const bool file_grew = byte_offset_into_file_ > directory_entry_.Size();
+
+        if (file_grew || !marked_archive_)
         {
-            directory_entry_.UpdateSize(byte_offset_into_file_);
+            if (file_grew)
+            {
+                directory_entry_.UpdateSize(byte_offset_into_file_);
+            }
 
-            auto update_directory_entry_result = FAT32Directory::UpdateDirectoryEntrySize(block_io_adapter, directory_entry_address_, byte_offset_into_file_);
+            auto update_directory_entry_result = FAT32Directory::UpdateDirectoryEntrySize(block_io_adapter, directory_entry_address_, directory_entry_.Size());
 
             if (update_directory_entry_result != FilesystemResultCodes::SUCCESS)
             {
-                LogDebug1("Failed to update directory entry after append\n");
+                LogDebug1("Failed to update directory entry after write\n");
 
                 return update_directory_entry_result;
             }
+
+            marked_archive_ = true;
         }
 
         //  Finished with success
@@ -347,10 +402,26 @@ namespace filesystems::fat32
     {
         LogEntryAndExit("Entering\n");
 
+        //  Reject before seeking - a read-only handle must not have its position moved by a
+        //      call it was never allowed to make.
+
+        if (!HasFileMode(mode_, FileModes::WRITE) && !HasFileMode(mode_, FileModes::APPEND))
+        {
+            return FilesystemResultCodes::FILE_NOT_OPENED_FOR_WRITE;
+        }
+
+        //  Get a lock on the filesystem to ensure thread safety - Write will just get the same lock recursively.
+
+        auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);
+
+        if (!locked_filesystem)
+        {
+            return FilesystemResultCodes::FILESYSTEM_DOES_NOT_EXIST;
+        }
+
         //  Move to the end of the file
 
         FilesystemResultCodes seek_result = SeekEnd();
-
         if (seek_result != FilesystemResultCodes::SUCCESS)
         {
             return seek_result;
@@ -361,10 +432,12 @@ namespace filesystems::fat32
 
     FilesystemResultCodes FAT32File::Close()
     {
-        LogEntryAndExit("Entering with file name: %s\n", Filename()->c_str());
+        LogDebug1("Closing file: %s\n", path_.c_str());
 
-        //  Remove the file from the file map
+        auto locked_filesystem = FAT32Filesystem::Lock(filesystem_uuid_);
 
-        return GetFileMap().RemoveFile(*this);
+        const FilesystemResultCodes result = GetFileMap().RemoveFile(*this);
+
+        return result;
     }
 } // namespace filesystems::fat32

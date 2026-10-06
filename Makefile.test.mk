@@ -47,11 +47,13 @@ LDLIBS = -lCppUTest -lCppUTestExt -lminimalclib -lminimalstdio -lminimalstdlib
 
 CDEFINES += -D__NO_LOGGING__
 
+.PRECIOUS: $(TEST_EXE)
+
 test: clean checkdirs $(TEST_EXE)
 
 $(TEST_EXE): $(TEST_OBJ) $(OBJ)
 	$(LD) $(OBJ) $(TEST_OBJ) $(LDFLAGS) $(LDLIBS) $(TEST_LIB) -o $(TEST_EXE)
-	-./$(TEST_EXE)
+	./$(TEST_EXE)
 
 $(TEST_BUILD_ROOT)/src/%.o: $(SRC_ROOT)/%.cpp
 	@mkdir -p $(dir $@)
@@ -78,3 +80,28 @@ echo:
 	@echo "CPP Test Sources:       " $(CPP_TEST_SRC)
 	@echo "Object Files:           " $(OBJ)
 	@echo "CPP Test Object Files:  " $(TEST_OBJ)
+
+#  Coverage and sanitizer builds.  Target-specific variables propagate to prerequisites, so
+#      every object and the link pick them up.  Use '=' (deferred), not ':='.
+
+.PHONY: coverage asan
+
+coverage: TEST_CPP_FLAGS = $(COVERAGE_CPP_FLAGS)
+coverage: TEST_OPTIMIZATION_FLAGS = $(COVERAGE_OPTIMIZATION_FLAGS)
+coverage: LDFLAGS += --coverage
+coverage: test
+	gcov -r -n -o $(TEST_BUILD_ROOT)/src $(SRC_ROOT)/*.cpp | grep -A1 "^File '$(SRC_ROOT)/"
+
+#  ASan cannot see allocations made through __os_dynamic_heap_resource - the test heap is a
+#      static array carved by single_block_memory_heap.  This target is for UBSan and stack
+#      faults, not heap lifetime bugs inside that array.
+
+asan: TEST_CPP_FLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
+asan: TEST_OPTIMIZATION_FLAGS = -O1
+asan: LDFLAGS += -fsanitize=address,undefined
+asan: test
+
+#  Optional: merged per-file coverage for sources AND headers.  Requires `pip install gcovr`.
+.PHONY: coverage-full
+coverage-full: coverage
+	gcovr -r . --filter 'src/' --filter 'include/' $(TEST_BUILD_ROOT)
