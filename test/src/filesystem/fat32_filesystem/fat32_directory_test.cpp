@@ -6,6 +6,7 @@
 
 #include "../../utility/mounted_test_filesystem.h"
 #include "../../utility/test_task_owner.h"
+#include "../../utility/stack_usage.h"
 
 #include "filesystem/fat32_directory.h"
 #include "filesystem/fat32_filesystem.h"
@@ -17,6 +18,12 @@ namespace
     using namespace filesystems::fat32;
 
     ut_utility::MountedTestFilesystem test_fs;
+
+    //  How much stack one directory operation may use.  Target task stacks are 32 KB, and the caller -
+    //      and any re-entry from a VisitDirectory callback - needs room too.
+
+    constexpr size_t DIRECTORY_OPERATION_STACK_BUDGET = 10 * 1024;
+    constexpr size_t REENTRANT_DIRECTORY_OPERATION_STACK_BUDGET = 12 * 1024;
 
     //  Counts long filename entries still marked in use inside one directory cluster.
     //      Attribute 0x0F marks an LFN entry; byte 0 of 0xE5 marks it deleted and 0x00 marks
@@ -1080,5 +1087,66 @@ namespace
         CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*doomed)->RemoveDirectory());
 
         CHECK_EQUAL(FilesystemResultCodes::DIRECTORY_NOT_FOUND, filesystem.GetDirectory(minstd::fixed_string<>("/DOOMED")).ResultCode());
+    }
+
+    TEST(FAT32DirectoryTest, DirectoryOperationsStayWithinTheStackBudget)
+    {
+        auto root = test_fs.RootDirectory();
+        auto subdir1 = root->GetDirectory(minstd::fixed_string<>("SUBDIR1"));
+
+        CHECK(subdir1.Successful());
+
+        auto child = (*subdir1)->GetDirectory(minstd::fixed_string<MAX_FILENAME_LENGTH>("this is a long subdirectory name"));
+
+        CHECK(child.Successful());
+
+        FilesystemDirectory &directory = **child;
+        const minstd::fixed_string<> dot_dot("..");
+
+        //  The deepest path: after any directory is removed, GetDirectory("..") re-validates this
+        //      handle by resolving its own path, then resolves its parent's.  Removing a scratch
+        //      directory makes every handle re-validate.
+
+        auto scratch = root->CreateDirectory(minstd::fixed_string<>("SCRATCH1"));
+
+        CHECK(scratch.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*scratch)->RemoveDirectory());
+
+        ut_utility::PaintStack();
+        const bool found = directory.GetDirectory(dot_dot).Successful();
+        const size_t used = ut_utility::StackBytesUsedSincePaint();
+
+        CHECK(found);
+
+        //  The same call made from inside a VisitDirectory callback, where the walk's own frames sit
+        //      underneath it.
+
+        auto scratch2 = root->CreateDirectory(minstd::fixed_string<>("SCRATCH2"));
+
+        CHECK(scratch2.Successful());
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, (*scratch2)->RemoveDirectory());
+
+        bool found_in_callback = false;
+
+        FilesystemDirectoryVisitorCallback callback = [&](const FilesystemDirectoryEntry &) -> FilesystemDirectoryVisitorCallbackStatus
+        {
+            found_in_callback = directory.GetDirectory(dot_dot).Successful();
+
+            return FilesystemDirectoryVisitorCallbackStatus::FINISHED;
+        };
+
+        ut_utility::PaintStack();
+        const FilesystemResultCodes visit_result = root->VisitDirectory(callback);
+        const size_t used_in_callback = ut_utility::StackBytesUsedSincePaint();
+
+        CHECK_EQUAL(FilesystemResultCodes::SUCCESS, visit_result);
+        CHECK(found_in_callback);
+
+#ifndef __SANITIZE_ADDRESS__
+        CHECK_TEXT(used < DIRECTORY_OPERATION_STACK_BUDGET,
+                   StringFromFormat("GetDirectory(\"..\") used %lu bytes of stack", (unsigned long)used).asCharString());
+        CHECK_TEXT(used_in_callback < REENTRANT_DIRECTORY_OPERATION_STACK_BUDGET,
+                   StringFromFormat("GetDirectory(\"..\") inside VisitDirectory used %lu bytes of stack", (unsigned long)used_in_callback).asCharString());
+#endif
     }
 }

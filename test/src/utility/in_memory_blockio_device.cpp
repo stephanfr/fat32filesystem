@@ -4,17 +4,36 @@
 
 #include "in_memory_blockio_device.h"
 #include "heaps.h"
+#include "__memory_resource/memory_heap_resource_adapter.h"
+#include "single_block_memory_heap"
 
 #include <stdio.h>
 
 namespace ut_utility
 {
+    namespace
+    {
+        //  Disk images get a heap of their own.  Once the shared test heap is full it never merges
+        //      freed blocks, and serves any size it has no free block for by splitting its largest
+        //      free block - a freed image.  A handful of new allocation sizes then leave no room for
+        //      another image, and every later Open() fails.  Here every block is an image of the same
+        //      size, so a freed one is always reused whole.
+
+        constexpr size_t IMAGE_SLOTS = 6;
+        constexpr size_t MAX_IMAGE_SIZE_IN_BYTES = 36 * 1024 * 1024;
+        constexpr size_t IMAGE_HEAP_ALIGNMENT = 16;
+
+        alignas(IMAGE_HEAP_ALIGNMENT) char image_heap_buffer[IMAGE_SLOTS * (MAX_IMAGE_SIZE_IN_BYTES + 256)];
+
+        minstd::single_block_memory_heap image_heap(image_heap_buffer, sizeof(image_heap_buffer), IMAGE_HEAP_ALIGNMENT);
+        minstd::pmr::memory_heap_resource_adapter image_heap_resource(image_heap);
+    }
 
     InMemoryFileBlockIODevice::~InMemoryFileBlockIODevice()
     {
         if (in_memory_file_ != nullptr)
         {
-            __os_dynamic_heap_resource.deallocate(in_memory_file_, size_in_blocks_ * sizeof(Block), alignof(Block));
+            image_heap_resource.deallocate(in_memory_file_, size_in_blocks_ * sizeof(Block), alignof(Block));
         }
     }
 
@@ -41,7 +60,14 @@ namespace ut_utility
 
         size_in_blocks_ = size_in_bytes_ / BlockSize();
 
-        in_memory_file_ = static_cast<Block *>(__os_dynamic_heap_resource.allocate(size_in_blocks_ * sizeof(Block), alignof(Block)));
+        in_memory_file_ = static_cast<Block *>(image_heap_resource.allocate(size_in_blocks_ * sizeof(Block), alignof(Block)));
+
+        if (in_memory_file_ == nullptr)
+        {
+            fclose(file_to_read);
+
+            return false;
+        }
 
         size_t blocks_read = fread(in_memory_file_, BlockSize(), size_in_blocks_, file_to_read);
 

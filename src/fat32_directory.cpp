@@ -167,11 +167,11 @@ namespace filesystems::fat32
 
         //  Get the parent path from the current absolute path.
 
-        minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> parent_path;
+        minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> parent_path(__dynamic_string_allocator);
 
         size_t last_slash = path_.find_last_of('/');
 
-        if (last_slash != minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>::npos)
+        if (last_slash != minstd::string::npos)
         {
             if (last_slash != 0)
             {
@@ -179,7 +179,7 @@ namespace filesystems::fat32
             }
             else
             {
-                parent_path = "/";
+                parent_path += "/";
             }
         }
         else
@@ -235,7 +235,7 @@ namespace filesystems::fat32
 
         //  We need the full path - but there is a special case for the root directory, we do not add a forward slash.
 
-        minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> directory_absolute_path(path_);
+        minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> directory_absolute_path(path_, __dynamic_string_allocator);
 
         AppendToPath(directory_absolute_path, directory_name);
 
@@ -353,7 +353,7 @@ namespace filesystems::fat32
 
         //  Create the directory object and return it
 
-        minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH> path(path_);
+        minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> path(path_, __dynamic_string_allocator);
 
         AppendToPath(path, new_directory_name);
 
@@ -466,7 +466,7 @@ namespace filesystems::fat32
 
         //  Remove the directory cluster entry
 
-        filesystem.DirectoryCache().RemoveWithChildren(first_cluster_);
+        ReturnOnCallFailure(parent_directory_cluster.RemoveEntry(entry_address_));
 
         //  Release the clusters for the directory
 

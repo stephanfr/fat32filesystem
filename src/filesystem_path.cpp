@@ -43,8 +43,15 @@ namespace filesystems
 
         //  Start parsing
 
-        minstd::unique_ptr<FilesystemPath> path(dynamic_new<FilesystemPath>(FilesystemPath(path_string)));
+        void *path_memory = __os_dynamic_heap_resource.allocate(sizeof(FilesystemPath), alignof(FilesystemPath));
 
+        if (path_memory == nullptr)
+        {
+            return Result::Failure(FilesystemResultCodes::INTERNAL_ERROR);
+        }
+
+        minstd::unique_ptr<FilesystemPath> path(new (path_memory) FilesystemPath(path_string), __os_dynamic_heap_resource);
+        
         //  Check if this is the trivial case of the root directory.  We know the first character is the root directory delimiter above.
 
         if ((path_string.length() == 1) && (path_string[0] == DIRECTORY_DELIMITER))
