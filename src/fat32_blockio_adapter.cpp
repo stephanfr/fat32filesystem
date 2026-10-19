@@ -140,6 +140,13 @@ namespace filesystems::fat32
             return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
         }
 
+        //  Every FAT boot sector ends 0x55 0xAA at offsets 510-511, and FAT32 defines only version 0.0.
+
+        if ((first_lba_buffer[510] != 0x55) || (first_lba_buffer[511] != 0xAA) || (bpb.version_ != 0))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
         if (bpb.logical_sectors_per_cluster_ == 0 ||
             bpb.logical_sectors_per_cluster_ > MAX_LOGICAL_SECTORS_PER_CLUSTER ||
             !IsPowerOfTwo(bpb.logical_sectors_per_cluster_))
@@ -236,6 +243,34 @@ namespace filesystems::fat32
         LogDebug1("First LBA, FAT LBA, Data LBA, Logical Sectors per FAT32, Logical Sectors per Cluster: %u, %u, %u, %u, %u\n", first_lba_sector, fat_lba, data_lba, bpb.logical_sectors_per_fat32_, bpb.logical_sectors_per_cluster_);
         LogDebug1("Root Directory Cluster: %u\n", bpb.root_directory_cluster_);
 
+        //  BPB_ExtFlags: bit 7 set means mirroring is off and only the FAT numbered in bits 0-3 is
+        //      active.  With mirroring on, FAT 0 is read and every FAT is written.
+
+        const bool mirror_fats = (bpb.flags_ & 0x0080) == 0;
+        const uint32_t active_fat = mirror_fats ? 0 : (bpb.flags_ & 0x000F);
+
+        if (active_fat >= bpb.number_of_fats_)
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t active_fat_offset = 0;
+        uint32_t active_fat_lba = 0;
+
+        if (!CheckedMulU32(active_fat, bpb.logical_sectors_per_fat32_, active_fat_offset) ||
+            !CheckedAddU32(fat_lba, active_fat_offset, active_fat_lba))
+        {
+            return Result::Failure(FilesystemResultCodes::FAT32_NOT_A_FAT32_FILESYSTEM);
+        }
+
+        uint32_t fsinfo_sector = 0;
+
+        if ((bpb.location_of_filesystem_information_sector_ != 0) &&
+            (bpb.location_of_filesystem_information_sector_ < bpb.reserved_logical_sectors_))
+        {
+            fsinfo_sector = first_lba_sector + bpb.location_of_filesystem_information_sector_;
+        }
+
         //  Return success
 
         return Result::Success(FAT32BlockIOAdapter(io_device,
@@ -243,10 +278,13 @@ namespace filesystems::fat32
                                                    bpb.logical_sectors_per_cluster_,
                                                    bpb.bytes_per_logical_sector_,
                                                    bpb.logical_sectors_per_fat32_,
+                                                   bpb.number_of_fats_,
                                                    first_lba_sector,
-                                                   fat_lba,
+                                                   active_fat_lba,
                                                    data_lba,
-                                                   maximum_cluster_number));
+                                                   maximum_cluster_number,
+                                                   fsinfo_sector,
+                                                   mirror_fats));
     }
 
     ValueResult<FilesystemResultCodes, FAT32ClusterIndex> FAT32BlockIOAdapter::NextClusterInChain(FAT32ClusterIndex cluster) const
@@ -285,7 +323,7 @@ namespace filesystems::fat32
 
         //  Finished with success
 
-        return Result::Success(FAT32ClusterIndex(current_fat[offset]));
+        return Result::Success(FAT32ClusterIndex(current_fat[offset] & 0x0FFFFFFF));
     }
 
     ValueResult<FilesystemResultCodes, FAT32ClusterIndex> FAT32BlockIOAdapter::PreviousClusterInChain(FAT32ClusterIndex first_cluster,
@@ -315,10 +353,19 @@ namespace filesystems::fat32
 
         bool at_eof = false;
 
+        //  A legal chain visits each data cluster at most once; more steps than that is a cycle.
+
+        uint32_t steps = 0;
+
         do
         {
-            auto next_cluster = NextClusterInChain(current_cluster);
+            if (++steps > static_cast<uint32_t>(MaximumClusterNumber()))
+            {
+                return Result::Failure(FilesystemResultCodes::FAT32_CLUSTER_CHAIN_IS_CORRUPT);
+            }
 
+            auto next_cluster = NextClusterInChain(current_cluster);
+            
             ReturnOnFailure(next_cluster);
 
             if (next_cluster.Value() == cluster)
@@ -337,14 +384,21 @@ namespace filesystems::fat32
 
     FilesystemResultCodes FAT32BlockIOAdapter::UpdateFATTableEntry(FAT32ClusterIndex cluster, FAT32ClusterIndex new_value)
     {
+        using Result = FilesystemResultCodes;
+
         LogEntryAndExit("Updating FAT Table entry: %d with new value: %d\n", static_cast<uint32_t>(cluster), static_cast<uint32_t>(new_value));
 
         //  Insure we stay in the bounds of the FAT table.  We do have to be able to write a zero (FAT32EntryFree) to the FAT table though.
 
-        if (IsClusterOutOfRange(cluster) || ((new_value != FAT32EntryFree) && IsClusterOutOfRange(new_value)))
+        if (IsClusterOutOfRange(cluster) || !IsValidFATValue(new_value))
         {
             return FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE;
         }
+
+        //  The first FAT change since mount makes FSInfo's free count and next-free hint stale,
+        //      mark them unknown before changing anything.
+
+        ReturnOnCallFailure(InvalidateFSInfoOnce());
 
         // Calculate the sector LBA from the FAT table base address
 
@@ -367,7 +421,7 @@ namespace filesystems::fat32
             return FilesystemResultCodes::FAT32_UNABLE_TO_READ_FAT_TABLE_SECTOR;
         }
 
-        current_fat[start_off] = static_cast<uint32_t>(new_value);
+        current_fat[start_off] = (current_fat[start_off] & 0xF0000000) | (static_cast<uint32_t>(new_value) & 0x0FFFFFFF);
 
         if (io_device_->WriteBlock((uint8_t *)current_fat, sector.Value(), 1).Failed())
         {
@@ -375,7 +429,65 @@ namespace filesystems::fat32
             return FilesystemResultCodes::FAT32_UNABLE_TO_WRITE_FAT_TABLE_SECTOR;
         }
 
+        //  Mirror the update into every remaining FAT - unless BPB_ExtFlags turned mirroring off, in
+        //      which case only the active FAT is maintained.  With mirroring on, FAT 0 is the active
+        //      FAT, so the remaining FATs are 1 .. number_of_fats_ - 1.
+
+        for (uint32_t fat_index = 1; mirror_fats_ && (fat_index < number_of_fats_); fat_index++)
+        {
+            uint32_t fat_offset = 0;
+            uint32_t mirror_sector = 0;
+
+            if (!CheckedMulU32(fat_index, sectors_per_fat_, fat_offset) ||
+                !CheckedAddU32(sector.Value(), fat_offset, mirror_sector))
+            {
+                return FilesystemResultCodes::FAT32_CLUSTER_OUT_OF_RANGE;
+            }
+
+            if (io_device_->WriteBlock((uint8_t *)current_fat, mirror_sector, 1).Failed())
+            {
+                LogDebug1("Unable to write mirrored FAT32 sector: %u\n", mirror_sector);
+                return FilesystemResultCodes::FAT32_UNABLE_TO_WRITE_FAT_TABLE_SECTOR;
+            }
+        }
+
         //  Finished with success
+
+        return FilesystemResultCodes::SUCCESS;
+    }
+
+    FilesystemResultCodes FAT32BlockIOAdapter::InvalidateFSInfoOnce()
+    {
+        if (fsinfo_invalidated_ || (fsinfo_sector_ == 0))
+        {
+            return FilesystemResultCodes::SUCCESS;
+        }
+
+        uint32_t sector[(io_device_->BlockSize() / sizeof(uint32_t)) + 2];
+
+        if (io_device_->ReadFromBlock((uint8_t *)sector, fsinfo_sector_, 1).Failed())
+        {
+            LogDebug1("Unable to read FSInfo sector: %u\n", fsinfo_sector_);
+            return FilesystemResultCodes::FAT32_DEVICE_READ_ERROR;
+        }
+
+        //  Only touch a sector that really is FSInfo: lead, struct and trail signatures.
+
+        if ((sector[0] == 0x41615252) && (sector[121] == 0x61417272) && (sector[127] == 0xAA550000))
+        {
+            sector[122] = 0xFFFFFFFF;       //  FSI_Free_Count: unknown
+            sector[123] = 0xFFFFFFFF;       //  FSI_Nxt_Free: no hint
+
+            if (io_device_->WriteBlock((uint8_t *)sector, fsinfo_sector_, 1).Failed())
+            {
+                LogDebug1("Unable to write FSInfo sector: %u\n", fsinfo_sector_);
+                return FilesystemResultCodes::FAT32_DEVICE_WRITE_ERROR;
+            }
+        }
+
+        //  Done for this mount - whether we updated it or found no valid FSInfo to update.
+
+        fsinfo_invalidated_ = true;
 
         return FilesystemResultCodes::SUCCESS;
     }
@@ -391,6 +503,10 @@ namespace filesystems::fat32
         if (starting_cluster == 0)
         {
             starting_cluster = last_empty_cluster_found_ > root_directory_cluster_ ? last_empty_cluster_found_ : root_directory_cluster_;
+        }
+        else if (starting_cluster > MaximumClusterNumber())
+        {
+            starting_cluster = FAT32ClusterIndex(2);
         }
 
         //  Do not try to read past the end of the FAT table
@@ -409,14 +525,30 @@ namespace filesystems::fat32
 
         ReturnOnCallFailure(ReadFATBlock(FAT32ClusterIndex(current_cluster), current_fat));
 
+        //  The scan starts at a high-water mark, so clusters freed below it would never be
+        //      reused without a wrap.  Without this the volume reports itself permanently
+        //      full after enough create/delete cycles, however empty it actually is.
+
+        bool wrapped = false;
+
         while (true)
         {
-            if (current_cluster >= (uint32_t)MaximumClusterNumber())
+            if (current_cluster > (uint32_t)MaximumClusterNumber())
             {
-                return Result::Failure(FilesystemResultCodes::FAT32_DEVICE_FULL);
+                if (wrapped)
+                {
+                    return Result::Failure(FilesystemResultCodes::FAT32_DEVICE_FULL);
+                }
+
+                wrapped = true;
+                current_cluster = 2;
+
+                ReturnOnCallFailure(ReadFATBlock(FAT32ClusterIndex(current_cluster), current_fat));
+
+                continue;
             }
 
-            if (current_fat[current_cluster % fat32_entries_per_block_] == FAT32EntryFree)
+            if ((current_fat[current_cluster % fat32_entries_per_block_] & 0x0FFFFFFF) == FAT32EntryFree)
             {
                 break;
             }
@@ -434,7 +566,7 @@ namespace filesystems::fat32
 
         //  We will fake it here as this new cluster is likely to be used and will update the last used cluster
 
-        const_cast<FAT32BlockIOAdapter *>(this)->last_empty_cluster_found_ = minstd::max(last_empty_cluster_found_, FAT32ClusterIndex(current_cluster));
+        last_empty_cluster_found_ = minstd::max(last_empty_cluster_found_, FAT32ClusterIndex(current_cluster));
 
         //  Return the cluster
 

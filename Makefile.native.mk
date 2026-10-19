@@ -28,7 +28,7 @@ $(LIB): $(CPP_OBJ)
 
 $(OBJ_DIR)/%.o: $(CPP_SRC_DIR)/%.cpp
 	@/bin/mkdir -p $(OBJ_DIR) $(LIB_DIR)
-	$(CC) $(INCLUDE_DIRS) $(CPP_FLAGS) $(TEST_OPTIMIZATION_FLAGS) $(TEST_CPP_FLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CC) $(INCLUDE_DIRS) $(CPP_FLAGS) $(TEST_OPTIMIZATION_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 -include $(CPP_DEP)
 

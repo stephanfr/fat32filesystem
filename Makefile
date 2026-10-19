@@ -9,3 +9,7 @@ include Makefile.native.mk
 else
 include Makefile.aarch64.mk
 endif
+
+.PHONY: test coverage asan tsan coverage-full
+test coverage asan tsan coverage-full:
+	@$(MAKE) -f Makefile.test.mk $@

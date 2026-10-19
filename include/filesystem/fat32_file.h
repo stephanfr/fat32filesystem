@@ -27,7 +27,8 @@ namespace filesystems::fat32
               first_cluster_(GetOpaqueData(directory_entry).FirstCluster()),
               current_cluster_(GetOpaqueData(directory_entry).FirstCluster()),
               byte_offset_into_cluster_(byte_offset_into_cluster),
-              byte_offset_into_file_(byte_offset_into_file)
+              byte_offset_into_file_(byte_offset_into_file),
+              marked_archive_(false)
         {
         }
 
@@ -115,5 +116,7 @@ namespace filesystems::fat32
         FAT32ClusterIndex current_cluster_;
         uint32_t byte_offset_into_cluster_;
         uint32_t byte_offset_into_file_;
+
+        bool marked_archive_;
     };
 } // namespace filesystems::fat32

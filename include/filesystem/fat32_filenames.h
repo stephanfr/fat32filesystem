@@ -52,12 +52,12 @@ namespace filesystems::fat32
         {
             for (int i = 0; (i < 8) && (name[i] != 0x00); i++)
             {
-                const_cast<char *>(name_)[i] = name[i];
+                name_[i] = name[i];
             }
 
             for (int i = 0; (i < 3) && (extension[i] != 0x00); i++)
             {
-                const_cast<char *>(extension_)[i] = extension[i];
+                extension_[i] = extension[i];
             }
         }
 
@@ -70,7 +70,7 @@ namespace filesystems::fat32
          */
         FAT32Compact8Dot3Filename(const FAT32Compact8Dot3Filename &filename_to_copy)
         {
-            memcpy(const_cast<char *>(name_), filename_to_copy.name_, 11);
+            memcpy(name_, filename_to_copy.name_, 11);
         }
 
         FAT32Compact8Dot3Filename(FAT32Compact8Dot3Filename &&filename_to_copy) = delete;
@@ -86,7 +86,7 @@ namespace filesystems::fat32
          */
         FAT32Compact8Dot3Filename &operator=(const FAT32Compact8Dot3Filename &filename_to_copy)
         {
-            memcpy(const_cast<char *>(name_), filename_to_copy.name_, 11);
+            memcpy(name_, filename_to_copy.name_, 11);
 
             return *this;
         }
@@ -116,8 +116,26 @@ namespace filesystems::fat32
             return static_cast<uint8_t>(name_[0]);
         }
 
-        const char name_[8] = {0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20};
-        const char extension_[3] = {0x20, 0x20, 0x20};
+        /**
+         * @brief The long-filename checksum of this short name: the specification's rotate-and-add
+         *        over the 11 bytes exactly as stored (name, then extension, space padded).
+         */
+        uint8_t Checksum() const noexcept
+        {
+            const uint8_t *bytes = reinterpret_cast<const uint8_t *>(name_);
+
+            uint8_t checksum = 0;
+
+            for (int i = 0; i < 11; i++)
+            {
+                checksum = ((checksum & 1) ? 0x80 : 0) + (checksum >> 1) + bytes[i];
+            }
+
+            return checksum;
+        }
+
+        char name_[8] = {0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20};
+        char extension_[3] = {0x20, 0x20, 0x20};
     } PACKED;
 
     //
@@ -202,7 +220,7 @@ namespace filesystems::fat32
             //  Move the filename, dropping spaces used for padding and extract the extension
             //      We will assume the compact filename is coming off the platter and is OK, so do not scrub the name or extension.
 
-            while ((*src != ' ') && (bytes_copied < 8))
+            while ((bytes_copied < 8) && (*src != ' '))
             {
                 name_.push_back(*src++);
                 bytes_copied++;
@@ -213,7 +231,7 @@ namespace filesystems::fat32
                 src = compact_filename.extension_;
                 bytes_copied = 0;
 
-                while ((*src != ' ') && (bytes_copied < 3))
+                while ((bytes_copied < 3) && (*src != ' '))
                 {
                     extension_.push_back(*src++);
                     bytes_copied++;
@@ -602,7 +620,7 @@ namespace filesystems::fat32
         {
             for (uint32_t i = 0; i < name_.size(); i++)
             {
-                if (!isprint(name_[i]) || (FORBIDDEN_LONG_FILENAME_CHARACTERS.find(name_[i]) != minstd::string::npos))
+                if (!isprint(static_cast<unsigned char>(name_[i])) || (FORBIDDEN_LONG_FILENAME_CHARACTERS.find(name_[i]) != minstd::string::npos))
                 {
                     return true;
                 }
@@ -621,12 +639,12 @@ namespace filesystems::fat32
          */
         void StripSpacesAndTrailingPeriods()
         {
-            while (name_[0] == ' ')
+            while (!name_.empty() && (name_[0] == ' '))
             {
                 name_.erase(0, 1);
             }
 
-            while ((name_.back() == ' ') || (name_.back() == '.'))
+            while (!name_.empty() && ((name_.back() == ' ') || (name_.back() == '.')))
             {
                 name_.pop_back();
             }

@@ -14,16 +14,18 @@ namespace
 #pragma GCC diagnostic ignored "-Wunused-variable"
     TEST_GROUP (FilesystemPathParser)
     {
+        size_t heap_bytes_at_start_ = 0;
+
         void setup()
         {
-            LogInfo("Setup: Heap Bytes Allocated: %d\n", __os_dynamic_heap_core.bytes_in_use());
-            CHECK_EQUAL(0, __os_dynamic_heap_core.bytes_in_use());
+            heap_bytes_at_start_ = __os_dynamic_heap_core.bytes_in_use();
+            LogInfo("Setup: Heap Bytes Allocated: %d\n", heap_bytes_at_start_);
         }
 
         void teardown()
         {
             LogInfo("Teardown: Heap Bytes Allocated: %d\n", __os_dynamic_heap_core.bytes_in_use());
-            CHECK_EQUAL(0, __os_dynamic_heap_core.bytes_in_use());
+            CHECK_EQUAL(heap_bytes_at_start_, __os_dynamic_heap_core.bytes_in_use());
         }
     };
 #pragma GCC diagnostic pop
@@ -443,5 +445,29 @@ namespace
 
             CHECK(path.ResultCode() == FilesystemResultCodes::ILLEGAL_PATH);
         }
+    }
+
+    TEST(FilesystemPathParser, RelativePathMayBeginWithAnyPrintableCharacter)
+    {
+        CHECK(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("_config")).Successful());
+        CHECK(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("$data/file")).Successful());
+
+        //  Still rejected: leading whitespace.
+
+        CHECK_FALSE(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>(" leading")).Successful());
+        CHECK_FALSE(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>(".hidden")).Successful());
+    }
+
+    TEST(FilesystemPathParser, DotAndDotDotComponentsAreIllegal)
+    {
+        CHECK_EQUAL(FilesystemResultCodes::ILLEGAL_PATH, FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/SUBDIR1/.")).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::ILLEGAL_PATH, FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/SUBDIR1/..")).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::ILLEGAL_PATH, FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/./SUBDIR1")).ResultCode());
+        CHECK_EQUAL(FilesystemResultCodes::ILLEGAL_PATH, FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("SUBDIR1/../SUBDIR2")).ResultCode());
+
+        //  Names that merely contain periods are fine.
+
+        CHECK(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/SUBDIR1/a.b")).Successful());
+        CHECK(FilesystemPath::ParsePathString(minstd::fixed_string<MAX_FILESYSTEM_PATH_LENGTH>("/SUBDIR1/...x")).Successful());
     }
 }

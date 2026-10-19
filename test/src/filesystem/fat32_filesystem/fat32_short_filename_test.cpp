@@ -492,4 +492,37 @@ namespace
             CHECK(!short_filename2.IsDerivativeOfBasisFilename(basis_filename));
         }
     }
+
+    TEST(FAT32ShortFilename, HighBitCharactersAreNotCaseFolded)
+    {
+        FAT32ShortFilename short_filename("\xE9name", "txt");
+
+        STRCMP_EQUAL("\xE9NAME", short_filename.Name().c_str());
+        STRCMP_EQUAL("TXT", short_filename.Extension().c_str());
+        CHECK_FALSE(short_filename.LossyConversion());
+    }
+
+    TEST(FAT32ShortFilename, LeadingPeriodIsNotAnExtensionSeparator)
+    {
+        FAT32ShortFilename short_filename = FAT32LongFilename(".ab").GetBasisName();
+
+        STRCMP_EQUAL("AB~1", short_filename.Name().c_str());
+        STRCMP_EQUAL("", short_filename.Extension().c_str());
+
+        FAT32ShortFilename not_8_3;
+
+        CHECK_FALSE(FAT32LongFilename(".AB").Is8Dot3Filename(not_8_3));
+    }
+
+    TEST(FAT32ShortFilename, BlankCompactNameHasNoTail)
+    {
+        //  A corrupt entry whose name field is all spaces.
+
+        FAT32Compact8Dot3Filename blank("        ", "   ");
+
+        FAT32ShortFilename short_filename(blank);
+
+        CHECK(short_filename.Name().empty());
+        CHECK_FALSE(short_filename.NumericTail().has_value());
+    }
 }

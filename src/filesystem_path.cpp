@@ -6,6 +6,7 @@
 #include "heaps.h"
 
 #include <ctype.h>
+#include <string.h>
 
 namespace filesystems
 {
@@ -20,12 +21,17 @@ namespace filesystems
             return Result::Failure(FilesystemResultCodes::EMPTY_PATH);
         }
 
-        if ((path_string[0] != DIRECTORY_DELIMITER) && !isalnum(path_string[0])) //  Insure path begins with an alpha or numeric if it is not the root
+        const unsigned char first_char = static_cast<unsigned char>(path_string[0]);
+
+        //  A relative path may begin with any printable, non-blank character.  Filenames such as
+        //      "_config" and "$data" are legal.
+
+        if ((path_string[0] != DIRECTORY_DELIMITER) && (!isprint(first_char) || isspace(first_char) || (first_char == '.')))
         {
             return Result::Failure(FilesystemResultCodes::ILLEGAL_PATH);
         }
 
-        if (isspace(path_string[path_string.length() - 1])) //  Insure path does not end with whitespace
+        if (isspace(static_cast<unsigned char>(path_string[path_string.length() - 1])))     //  Insure path does not end with whitespace
         {
             return Result::Failure(FilesystemResultCodes::ILLEGAL_PATH);
         }
@@ -37,8 +43,15 @@ namespace filesystems
 
         //  Start parsing
 
-        minstd::unique_ptr<FilesystemPath> path(dynamic_new<FilesystemPath>(FilesystemPath(path_string)));
+        void *path_memory = __os_dynamic_heap_resource.allocate(sizeof(FilesystemPath), alignof(FilesystemPath));
 
+        if (path_memory == nullptr)
+        {
+            return Result::Failure(FilesystemResultCodes::INTERNAL_ERROR);
+        }
+
+        minstd::unique_ptr<FilesystemPath> path(new (path_memory) FilesystemPath(path_string), __os_dynamic_heap_resource);
+        
         //  Check if this is the trivial case of the root directory.  We know the first character is the root directory delimiter above.
 
         if ((path_string.length() == 1) && (path_string[0] == DIRECTORY_DELIMITER))
@@ -65,7 +78,7 @@ namespace filesystems
 
         for (uint32_t i = 0; i < path->length_; i++)
         {
-            if (!isprint(path->parsed_path_[i]))
+            if (!isprint(static_cast<unsigned char>(path->parsed_path_[i])))
             {
                 return Result::Failure(FilesystemResultCodes::ILLEGAL_PATH);
             }
@@ -78,6 +91,16 @@ namespace filesystems
                 }
 
                 path->parsed_path_[i] = 0;
+            }
+        }
+
+        //  Handle dot and dot-dot components as illegal
+
+        for (auto itr = path->begin(); itr != path->end(); itr++)
+        {
+            if ((strncmp(*itr, ".", 2) == 0) || (strncmp(*itr, "..", 3) == 0))
+            {
+                return Result::Failure(FilesystemResultCodes::ILLEGAL_PATH);
             }
         }
 

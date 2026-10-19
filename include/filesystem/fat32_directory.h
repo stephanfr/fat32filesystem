@@ -16,11 +16,23 @@
 #include "filesystem/fat32_blockio_adapter.h"
 #include "filesystem/fat32_directory_cluster.h"
 #include "filesystem/fat32_file.h"
+#include "filesystem/file_map.h"
 
 #include "result.h"
 
 namespace filesystems::fat32
 {
+    //  Forward declare the FAT32Filesystem class
+
+    class FAT32Filesystem;
+
+    //  Helper function to generate an OpenFileIdentity for a FAT32 directory entry.
+
+    inline OpenFileIdentity FAT32OpenFileIdentity(const UUID &filesystem_uuid, const FAT32DirectoryEntryAddress &address)
+    {
+        return OpenFileIdentity{filesystem_uuid,
+                                (static_cast<uint64_t>(static_cast<uint32_t>(address.Cluster())) << 32) | address.Index()};
+    }
 
     class FAT32Directory : public FilesystemDirectory
     {
@@ -79,6 +91,16 @@ namespace filesystems::fat32
         FAT32ClusterIndex FirstCluster() const noexcept
         {
             return first_cluster_;
+        }
+
+        /**
+         * @brief Returns the address of the directory entry.
+         *
+         * @return The address of the directory entry.
+         */
+        const FAT32DirectoryEntryAddress &EntryAddress() const noexcept
+        {
+            return entry_address_;
         }
 
         /**
@@ -214,6 +236,24 @@ namespace filesystems::fat32
         const FAT32ClusterIndex first_cluster_;
         const FAT32Compact8Dot3Filename compact_name_;
 
+        mutable uint64_t validated_at_generation_ = 0;
+
+        FilesystemResultCodes ValidateHandle(FAT32Filesystem &filesystem) const;
+
+        /**
+         * @brief Appends a path element, inserting a separator only when one is needed.  The
+         *        root directory's path is already "/", so appending another yields "//name".
+         */
+        void AppendToPath(minstd::string &path, const minstd::string &element) const
+        {
+            if (path != "/")
+            {
+                path += "/";
+            }
+
+            path += element;
+        }
+
         /**
          * Retrieves a directory entry with the specified name and type from the FAT32 filesystem.
          *
@@ -236,10 +276,10 @@ namespace filesystems::fat32
         /**
          * Retrieves the ".." entry of the current directory.  The dot dot entry is a reference to the parent directory.
          *
-         * @param block_io_adapter The FAT32BlockIOAdapter used for block I/O operations.
+         * @param filesystem The FAT32Filesystem
          * @return A PointerResult object containing the result code and the FilesystemDirectory object representing the ".." entry on success.
          */
-        PointerResult<FilesystemResultCodes, FilesystemDirectory> GetDotDotEntry(FAT32BlockIOAdapter &block_io_adapter) const;
+        PointerResult<FilesystemResultCodes, FilesystemDirectory> GetDotDotEntry(FAT32Filesystem &filesystem) const;
 
         /**
          * Renames an entry in the FAT32 directory.

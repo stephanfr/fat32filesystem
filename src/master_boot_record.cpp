@@ -44,7 +44,8 @@ namespace filesystems
         uint16_t boot_signature_;
     } PACKED MasterBootRecord;
 
-    constexpr uint8_t MBR_PARTITION_FILESYSTEM_FAT32_TYPE = 0x0C;
+    constexpr uint8_t MBR_PARTITION_FILESYSTEM_FAT32_CHS_TYPE = 0x0B;
+    constexpr uint8_t MBR_PARTITION_FILESYSTEM_FAT32_LBA_TYPE = 0x0C;
 
     FilesystemResultCodes GetPartitions(BlockIODevice &io_device, MassStoragePartitions &partitions)
     {
@@ -73,6 +74,8 @@ namespace filesystems
         //  Iterate over the available partitions
         //
 
+        bool boot_partition_assigned = false;
+
         for (uint32_t i = 0; i < MBR_NUMBER_OF_PARTITION_ENTRIES; i++)
         {
             //  Insure the partition is active
@@ -86,7 +89,8 @@ namespace filesystems
 
             //  Right now we only support FAT32 partitions
 
-            if (mbr.partitions_[i].type_ != MBR_PARTITION_FILESYSTEM_FAT32_TYPE)
+            if ((mbr.partitions_[i].type_ != MBR_PARTITION_FILESYSTEM_FAT32_CHS_TYPE) &&
+                (mbr.partitions_[i].type_ != MBR_PARTITION_FILESYSTEM_FAT32_LBA_TYPE))
             {
                 continue;
             }
@@ -107,23 +111,32 @@ namespace filesystems
 
             ReturnOnFailure(itr_entry);
 
-            if (itr_entry->end())
+            //  The volume label entry is optional; the specification's default label is "NO NAME"
+
+            minstd::fixed_string<MAX_FILENAME_LENGTH> volume_name("NO NAME");
+
+            if (!itr_entry->end())
             {
-                continue; //  We should not trip this condition, but just in case...
+                auto entry = itr_entry->AsDirectoryEntry();
+
+                ReturnOnFailure(entry);
+
+                volume_name = entry->Name();
             }
-
-            auto entry = itr_entry->AsDirectoryEntry();
-
-            ReturnOnFailure(entry);
 
             fat32::FAT32PartitionOpaqueData opaque_data(mbr.partitions_[i].first_logical_block_addressing_sector_, mbr.partitions_[i].num_sectors_);
 
-            //  Mark the partition as the boot partition if the index is zero (i.e. it is the first partition)
+            //  The first FAT32 partition is the boot partition, whatever slot it is in.  Slot 0 may
+            //      hold another filesystem or be empty.
 
-            partitions.emplace_back(entry->Name().c_str(),
-                                    entry->Name().c_str(),
+            const bool is_boot = !boot_partition_assigned;
+
+            boot_partition_assigned = true;
+
+            partitions.emplace_back(volume_name.c_str(),
+                                    volume_name.c_str(),
                                     FilesystemTypes::FAT32,
-                                    (i == 0),
+                                    is_boot,
                                     &opaque_data,
                                     sizeof(fat32::FAT32PartitionOpaqueData));
         }
