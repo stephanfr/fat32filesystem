@@ -84,7 +84,7 @@ echo:
 #  Coverage and sanitizer builds.  Target-specific variables propagate to prerequisites, so
 #      every object and the link pick them up.  Use '=' (deferred), not ':='.
 
-.PHONY: coverage asan
+.PHONY: coverage asan tsan
 
 coverage: TEST_CPP_FLAGS = $(COVERAGE_CPP_FLAGS)
 coverage: TEST_OPTIMIZATION_FLAGS = $(COVERAGE_OPTIMIZATION_FLAGS)
@@ -100,6 +100,12 @@ asan: TEST_CPP_FLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
 asan: TEST_OPTIMIZATION_FLAGS = -O1
 asan: LDFLAGS += -fsanitize=address,undefined
 asan: test
+
+# -no-pie keeps segments below TSan's shadow region when kernel mmap_rnd_bits=32
+tsan: TEST_CPP_FLAGS += -fsanitize=thread -fno-omit-frame-pointer
+tsan: TEST_OPTIMIZATION_FLAGS = -O1
+tsan: LDFLAGS += -fsanitize=thread -no-pie
+tsan: test
 
 #  Optional: merged per-file coverage for sources AND headers.  Requires `pip install gcovr`.
 .PHONY: coverage-full
