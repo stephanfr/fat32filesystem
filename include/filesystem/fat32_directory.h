@@ -218,15 +218,11 @@ namespace filesystems::fat32
                                                                              const FAT32ClusterIndex first_cluster,
                                                                              const FAT32Compact8Dot3Filename compact_name)
         {
-            minstd::unique_ptr<FilesystemDirectory> directory(static_cast<FilesystemDirectory *>(make_dynamic_unique<FAT32Directory>(filesystem_uuid,
-                                                                                                                                     path,
-                                                                                                                                     entry_address,
-                                                                                                                                     first_cluster,
-                                                                                                                                     compact_name)
-                                                                                                     .release()),
-                                                              __os_dynamic_heap_resource);
-
-            return directory;
+            return make_dynamic_unique<FAT32Directory>(filesystem_uuid,
+                                                       path,
+                                                       entry_address,
+                                                       first_cluster,
+                                                       compact_name);
         }
 
     private:

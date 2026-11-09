@@ -520,13 +520,13 @@ namespace filesystems::fat32
             minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> path(path_, __dynamic_string_allocator);
             AppendToPath(path, file_entry->Name());
 
-            minstd::unique_ptr<File> file(static_cast<File *>(make_dynamic_unique<FAT32File>(FilesystemUUID(), *file_entry, path, mode, 0, 0).release()), __os_dynamic_heap_resource);
+            minstd::unique_ptr<File> file = make_dynamic_unique<FAT32File>(FilesystemUUID(), *file_entry, path, mode, 0, 0);
 
             auto file_ref = GetFileMap().AddFile(minstd::move(file), FAT32OpenFileIdentity(FilesystemUUID(), GetOpaqueData(*file_entry).directory_entry_address_));
 
             ReturnOnFailure(file_ref);
 
-            minstd::unique_ptr<File> file_wrapper(static_cast<File *>(make_dynamic_unique<FileWrapper>(minstd::move(*file_ref)).release()), __os_dynamic_heap_resource);
+            minstd::unique_ptr<File> file_wrapper = make_dynamic_unique<FileWrapper>(minstd::move(*file_ref));
 
             return Result::Success(minstd::move(file_wrapper));
         }
@@ -556,13 +556,13 @@ namespace filesystems::fat32
 
         const OpenFileIdentity identity = FAT32OpenFileIdentity(FilesystemUUID(), (*fat32_file)->DirectoryEntryAddress());
 
-        minstd::unique_ptr<File> file(dynamic_cast<File *>(fat32_file.Value().release()), __os_dynamic_heap_resource);
+        minstd::unique_ptr<File> file(minstd::move(fat32_file.Value()));
 
         auto file_ref = GetFileMap().AddFile(minstd::move(file), identity);
 
         ReturnOnFailure(file_ref);
 
-        minstd::unique_ptr<File> file_wrapper(static_cast<File *>(make_dynamic_unique<FileWrapper>(minstd::move(*file_ref)).release()), __os_dynamic_heap_resource);
+        minstd::unique_ptr<File> file_wrapper = make_dynamic_unique<FileWrapper>(minstd::move(*file_ref));
 
         return Result::Success(minstd::move(file_wrapper));
     }
@@ -595,7 +595,7 @@ namespace filesystems::fat32
         minstd::dynamic_string<MAX_FILESYSTEM_PATH_LENGTH> path(path_, __dynamic_string_allocator);
         AppendToPath(path, new_file_directory_entry->Name());
 
-        minstd::unique_ptr<FAT32File> file(make_dynamic_unique<FAT32File>(FilesystemUUID(), *new_file_directory_entry, path, mode, 0, 0).release(), __os_dynamic_heap_resource);
+        minstd::unique_ptr<FAT32File> file = make_dynamic_unique<FAT32File>(FilesystemUUID(), *new_file_directory_entry, path, mode, 0, 0);
 
         return Result::Success(minstd::move(file));
     }
